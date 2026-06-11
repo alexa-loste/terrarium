@@ -5,7 +5,8 @@ import { chooseDestination } from '../../data/places';
 import { Phase, timeOfDayPrompt, WorldTime } from '../../data/clock';
 import { composeFeedPost, composeDirectMessage, composeThought } from './agentComms';
 import { fetchEmbedding } from '../util/llm';
-import { rememberConversation } from '../agent/memory';
+import { rememberConversation, reflectOnMemories } from '../agent/memory';
+import { MAX_ENERGY } from '../agentVitals';
 import { GameId, agentId, conversationId, playerId } from './ids';
 import {
   continueConversationMessage,
@@ -120,6 +121,11 @@ export const agentDoSomething = internalAction({
       const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, {
         worldId: args.worldId,
       });
+      // At night, sleep (the model goes idle + one overnight consolidation recharges energy).
+      // Skips all the waking behavior below.
+      if (await maybeSleep(ctx, args, now, time)) {
+        return;
+      }
       // First, on an idle tick, maybe publish to the feed or DM someone (rate-limited).
       // Placed before the wander/activity gates so it's actually reached regularly.
       if (await maybeDoComms(ctx, args, now, time)) {
@@ -242,6 +248,7 @@ async function finishWithActivity(
   description: string,
   emoji: string,
   now: number,
+  durationMs = 12_000,
 ) {
   await ctx.runMutation(api.aiTown.main.sendInput, {
     worldId: args.worldId,
@@ -249,9 +256,64 @@ async function finishWithActivity(
     args: {
       operationId: args.operationId,
       agentId: args.agent.id,
-      activity: { description, emoji, until: now + 12_000 },
+      activity: { description, emoji, until: now + durationMs },
     },
   });
+}
+
+// Sleep + energy (v1.3). At night agents sleep: the model goes idle (no dialogue/thoughts/
+// wandering), and on the first night tick of a new day they run one overnight consolidation
+// (reflectOnMemories) which recharges their energy. By day they're awake and energy drains a
+// little with each thing they do. Returns true if the agent is asleep (caller should stop).
+const ENERGY_DRAIN = 4; // per waking idle decision
+const SLEEP_DURATION = 60_000; // re-decide ~once a minute while asleep (cheap; no LLM)
+
+async function maybeSleep(ctx: any, args: any, now: number, time: WorldTime): Promise<boolean> {
+  const vitals = await ctx.runQuery(internal.agentVitals.getVitals, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+  });
+  const asleep = vitals?.asleep ?? false;
+  const energy = vitals?.energy ?? MAX_ENERGY;
+  const lastDay = vitals?.lastConsolidatedDay ?? 0;
+
+  if (time.phase === 'night') {
+    if (!asleep) {
+      if (lastDay !== time.day) {
+        // Overnight consolidation: one reflection pass, then fully recharged.
+        await reflectOnMemories(ctx, args.worldId, args.player.id);
+        await ctx.runMutation(internal.agentVitals.setVitals, {
+          worldId: args.worldId,
+          playerId: args.player.id,
+          energy: MAX_ENERGY,
+          asleep: true,
+          lastConsolidatedDay: time.day,
+        });
+      } else {
+        await ctx.runMutation(internal.agentVitals.setVitals, {
+          worldId: args.worldId,
+          playerId: args.player.id,
+          asleep: true,
+        });
+      }
+    }
+    await finishWithActivity(ctx, args, 'asleep', '😴', now, SLEEP_DURATION);
+    return true;
+  }
+
+  // Daytime: wake up if needed, and drain a little energy for being up and about.
+  const patch: { asleep?: boolean; energy?: number } = {};
+  if (asleep) patch.asleep = false;
+  const drained = Math.max(0, energy - ENERGY_DRAIN);
+  if (drained !== energy) patch.energy = drained;
+  if (Object.keys(patch).length) {
+    await ctx.runMutation(internal.agentVitals.setVitals, {
+      worldId: args.worldId,
+      playerId: args.player.id,
+      ...patch,
+    });
+  }
+  return false;
 }
 
 // During the day people are busier on the feed; deep night they mostly go quiet.

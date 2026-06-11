@@ -15,15 +15,28 @@ const DEFAULT_CLOCK = (now: number): WorldClock => ({
   speed: 1,
 });
 
-async function readClock(ctx: any, worldId: string): Promise<WorldClock> {
+type StoredClock = WorldClock & { frozen: boolean };
+
+async function readClock(ctx: any, worldId: string): Promise<StoredClock> {
   const row = await ctx.db
     .query('worldClock')
     .withIndex('worldId', (q: any) => q.eq('worldId', worldId))
     .first();
   if (row) {
-    return { epochRealMs: row.epochRealMs, epochWorldMs: row.epochWorldMs, speed: row.speed };
+    return {
+      epochRealMs: row.epochRealMs,
+      epochWorldMs: row.epochWorldMs,
+      speed: row.speed,
+      frozen: !!row.frozen,
+    };
   }
-  return DEFAULT_CLOCK(Date.now());
+  return { ...DEFAULT_CLOCK(Date.now()), frozen: false };
+}
+
+// While frozen, world-time stands still at the anchor — speed 0 makes worldTime() ignore
+// elapsed real time. Used by both getClock and currentTime, and mirrored on the frontend.
+function effective(clock: StoredClock): WorldClock {
+  return clock.frozen ? { ...clock, speed: 0 } : clock;
 }
 
 // Pin a Day-1 08:00 anchor the first time the world runs. Idempotent: a no-op once a row
@@ -34,7 +47,39 @@ export async function ensureClockRow(ctx: any, worldId: string): Promise<void> {
     .withIndex('worldId', (q: any) => q.eq('worldId', worldId))
     .first();
   if (existing) return;
-  await ctx.db.insert('worldClock', { worldId, ...DEFAULT_CLOCK(Date.now()) });
+  await ctx.db.insert('worldClock', { worldId, ...DEFAULT_CLOCK(Date.now()), frozen: false });
+}
+
+// Pause world-time: re-anchor at the current world position so it doesn't jump, then freeze.
+// Called from testing:stop so the clock stops when the world is frozen.
+export async function freezeClock(ctx: any, worldId: string): Promise<void> {
+  const row = await ctx.db
+    .query('worldClock')
+    .withIndex('worldId', (q: any) => q.eq('worldId', worldId))
+    .first();
+  const now = Date.now();
+  const cur = row
+    ? { epochRealMs: row.epochRealMs, epochWorldMs: row.epochWorldMs, speed: row.speed }
+    : DEFAULT_CLOCK(now);
+  const epochWorldMs = cur.epochWorldMs + (now - cur.epochRealMs) * cur.speed;
+  if (row) {
+    await ctx.db.patch(row._id, { epochRealMs: now, epochWorldMs, frozen: true });
+  } else {
+    await ctx.db.insert('worldClock', { worldId, ...cur, epochRealMs: now, epochWorldMs, frozen: true });
+  }
+}
+
+// Resume world-time from where it was frozen.
+export async function unfreezeClock(ctx: any, worldId: string): Promise<void> {
+  const row = await ctx.db
+    .query('worldClock')
+    .withIndex('worldId', (q: any) => q.eq('worldId', worldId))
+    .first();
+  if (!row) {
+    await ctx.db.insert('worldClock', { worldId, ...DEFAULT_CLOCK(Date.now()), frozen: false });
+    return;
+  }
+  await ctx.db.patch(row._id, { epochRealMs: Date.now(), frozen: false });
 }
 
 // Current clock + the world time it implies right now. Read by the frontend and by agents.
@@ -43,7 +88,7 @@ export const getClock = query({
   handler: async (ctx, args) => {
     const clock = await readClock(ctx, args.worldId);
     const now = Date.now();
-    return { ...clock, now, time: worldTime(clock, now) };
+    return { ...clock, now, time: worldTime(effective(clock), now) };
   },
 });
 
@@ -53,7 +98,7 @@ export const currentTime = internalQuery({
   handler: async (ctx, args) => {
     const clock = await readClock(ctx, args.worldId);
     const now = Date.now();
-    return { ...worldTime(clock, now), speed: clock.speed };
+    return { ...worldTime(effective(clock), now), speed: clock.speed, frozen: clock.frozen };
   },
 });
 

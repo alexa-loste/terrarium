@@ -16,7 +16,7 @@ import { fetchEmbedding } from './util/llm';
 import { chatCompletion } from './util/llm';
 import { startConversationMessage } from './agent/conversation';
 import { GameId } from './aiTown/ids';
-import { ensureClockRow } from './clock';
+import { ensureClockRow, freezeClock, unfreezeClock } from './clock';
 
 // Clear all of the tables except for the embeddings cache.
 const excludedTables: Array<TableNames> = ['embeddingsCache'];
@@ -79,6 +79,7 @@ export const stop = mutation({
     }
     console.log(`Stopping engine ${engine._id}...`);
     await ctx.db.patch(worldStatus._id, { status: 'stoppedByDeveloper' });
+    await freezeClock(ctx, worldStatus.worldId);
     await stopEngine(ctx, worldStatus.worldId);
   },
 });
@@ -98,6 +99,7 @@ export const resume = mutation({
     );
     await ctx.db.patch(worldStatus._id, { status: 'running' });
     await ensureClockRow(ctx, worldStatus.worldId);
+    await unfreezeClock(ctx, worldStatus.worldId);
     await startEngine(ctx, worldStatus.worldId);
   },
 });

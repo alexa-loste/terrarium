@@ -5,9 +5,19 @@ export type RosterEntry = {
   id: GameId<'players'>;
   name: string;
   character: string;
-  // Live status emoji: 💬 speaking, 💭 thinking, or the current activity emoji.
+  // Live status emoji: 💬 speaking, 💭 thinking, 😴 asleep, or the current activity emoji.
   status?: string;
+  // v1.3 vitals: energy 0..100 and whether they're currently asleep.
+  energy?: number;
+  asleep?: boolean;
 };
+
+// Energy bar color: green when rested, amber mid, red when running low.
+function energyColor(energy: number): string {
+  if (energy > 60) return 'bg-emerald-400';
+  if (energy > 30) return 'bg-amber-400';
+  return 'bg-red-400';
+}
 
 // Pull the front-facing ("down") frame out of a character's spritesheet so we can crop a
 // little portrait straight from the shared sprite PNG — no extra art needed.
@@ -42,7 +52,7 @@ export default function CharacterRoster({
               selected ? 'bg-yellow-400/30 ring-2 ring-yellow-300' : 'hover:bg-white/10'
             }`}
           >
-            <div className="relative h-12 w-12">
+            <div className={`relative h-12 w-12 ${p.asleep ? 'opacity-50' : ''}`}>
               <div className="h-12 w-12 overflow-hidden rounded-md bg-brown-700">
                 {f && (
                   <div
@@ -69,6 +79,14 @@ export default function CharacterRoster({
               )}
             </div>
             <span className="font-body text-[10px] leading-none text-white">{p.name}</span>
+            {typeof p.energy === 'number' && (
+              <div className="h-1 w-10 overflow-hidden rounded-full bg-black/50" title={`Energy ${Math.round(p.energy)}%`}>
+                <div
+                  className={`h-full rounded-full ${energyColor(p.energy)}`}
+                  style={{ width: `${Math.max(0, Math.min(100, p.energy))}%` }}
+                />
+              </div>
+            )}
           </button>
         );
       })}

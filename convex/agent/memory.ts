@@ -481,7 +481,7 @@ export const insertReflectionMemories = internalMutation({
   },
 });
 
-async function reflectOnMemories(
+export async function reflectOnMemories(
   ctx: ActionCtx,
   worldId: Id<'worlds'>,
   playerId: GameId<'players'>,

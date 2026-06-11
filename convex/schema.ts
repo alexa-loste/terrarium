@@ -78,12 +78,24 @@ export default defineSchema({
   }).index('worldId', ['worldId', 'ts']),
 
   // The anchored day/night clock (v1.3). One row per world; see data/clock.ts + convex/clock.ts.
+  // `frozen` pauses world-time when the world is frozen, so the clock stops with the sim.
   worldClock: defineTable({
     worldId: v.id('worlds'),
     epochRealMs: v.number(),
     epochWorldMs: v.number(),
     speed: v.number(),
+    frozen: v.optional(v.boolean()),
   }).index('worldId', ['worldId']),
+
+  // Per-agent vitals (v1.3): an energy bar that drains while awake and recharges by sleeping.
+  // At night agents sleep (the model goes idle) and run one overnight consolidation (reflect).
+  agentVitals: defineTable({
+    worldId: v.id('worlds'),
+    playerId,
+    energy: v.number(), // 0..100
+    asleep: v.boolean(),
+    lastConsolidatedDay: v.number(), // world-day index of the last overnight reflection
+  }).index('playerId', ['worldId', 'playerId']),
 
   ...agentTables,
   ...aiTownTables,

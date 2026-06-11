@@ -38,6 +38,8 @@ export default function Game() {
   const worldState = useQuery(api.world.worldState, worldId ? { worldId } : 'skip');
   const { historicalTime, timeManager } = useHistoricalTime(worldState?.engine);
 
+  const vitals = useQuery(api.agentVitals.listVitals, worldId ? { worldId } : 'skip');
+
   const scrollViewRef = useRef<HTMLDivElement>(null);
 
   if (!worldId || !engineId || !game) {
@@ -46,22 +48,30 @@ export default function Game() {
   const now = historicalTime ?? Date.now();
   const conversations = [...game.world.conversations.values()];
   const agents = [...game.world.agents.values()];
+  const vitalsById = new Map((vitals ?? []).map((v) => [v.playerId, v]));
   const roster = [...game.world.players.values()]
     .map((p) => {
       const d = game.playerDescriptions.get(p.id);
       if (!d) return undefined;
       // Mirror the sprite's status logic so the panel shows what each person is doing.
+      const v = vitalsById.get(p.id);
       const isSpeaking = conversations.some((c) => c.isTyping?.playerId === p.id);
       const isThinking =
         !isSpeaking && agents.some((a) => a.playerId === p.id && !!a.inProgressOperation);
       const activityEmoji =
         p.activity && p.activity.until > now ? p.activity.emoji : undefined;
-      const status = isSpeaking ? '💬' : isThinking ? '💭' : activityEmoji;
-      return { id: p.id, name: d.name, character: d.character, status };
+      const status =
+        v?.asleep && !isSpeaking ? '😴' : isSpeaking ? '💬' : isThinking ? '💭' : activityEmoji;
+      return {
+        id: p.id,
+        name: d.name,
+        character: d.character,
+        status,
+        energy: v?.energy,
+        asleep: v?.asleep,
+      };
     })
-    .filter(
-      (e): e is { id: GameId<'players'>; name: string; character: string; status?: string } => !!e,
-    );
+    .filter((e): e is NonNullable<typeof e> => !!e);
   const selectPlayer = (id: GameId<'players'>) => {
     setSelectedElement({ kind: 'player', id });
     setCameraTarget({ id, t: Date.now() });

@@ -33,10 +33,12 @@ export default function WorldClock({ worldId }: { worldId: Id<'worlds'> }) {
   }, []);
 
   if (!clock) return null;
+  const frozen = !!clock.frozen;
   const anchor: ClockAnchor = {
     epochRealMs: clock.epochRealMs,
     epochWorldMs: clock.epochWorldMs,
-    speed: clock.speed,
+    // When frozen, hold the displayed time still locally too (matches the server).
+    speed: frozen ? 0 : clock.speed,
   };
   const t = worldTime(anchor, Date.now() + skew);
   const alpha = nightOverlayAlpha(t);
@@ -49,8 +51,12 @@ export default function WorldClock({ worldId }: { worldId: Id<'worlds'> }) {
         style={{ backgroundColor: `rgba(20, 24, 64, ${alpha.toFixed(3)})` }}
       />
       {/* Clock badge + speed toggle, top-left of the map. */}
-      <div className="pointer-events-auto absolute left-3 top-3 z-30 flex items-center gap-2 rounded-lg border-2 border-brown-900 bg-clay-700/90 px-3 py-1.5 text-white shadow-solid">
-        <span className="text-lg leading-none">{phaseEmoji(t.phase)}</span>
+      <div
+        className={`pointer-events-auto absolute left-3 top-3 z-30 flex items-center gap-2 rounded-lg border-2 border-brown-900 px-3 py-1.5 text-white shadow-solid ${
+          frozen ? 'bg-brown-800/90' : 'bg-clay-700/90'
+        }`}
+      >
+        <span className="text-lg leading-none">{frozen ? '⏸' : phaseEmoji(t.phase)}</span>
         <span className="font-display text-sm tracking-wide tabular-nums">{clockLabel(t)}</span>
         <span className="mx-1 h-4 w-px bg-brown-900/60" />
         <div className="flex items-center gap-1">

@@ -24,7 +24,7 @@ export type WorldClock = {
 // cycle in a sitting; the speed button compresses it further.
 export const WORLD_DAY_MS = 24 * 60 * 1000;
 
-export const SPEED_OPTIONS = [1, 2, 4] as const;
+export const SPEED_OPTIONS = [1, 2, 4, 8] as const;
 
 export type Phase = 'night' | 'morning' | 'work' | 'evening';
 

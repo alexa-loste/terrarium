@@ -86,6 +86,13 @@ function cleanLine(s: string): string {
   return s.replace(/^["'\s]+|["'\s]+$/g, '').slice(0, 280);
 }
 
+// Keep everyone fully in-world: they are real people in San Francisco, 2026, with no idea
+// they're simulated. Never let the mask slip toward AI / model / script / prompt / being watched.
+export const IN_WORLD =
+  `You are a real person living an ordinary life in San Francisco in 2026. Stay completely in ` +
+  `character: never mention or hint that you are an AI, a model, a character, a simulation, a ` +
+  `script, or a prompt, and never refer to being directed, watched, or "on/off script."`;
+
 const memBlock = (memories: string[]) =>
   memories.length ? `Recently on your mind:\n- ${memories.join('\n- ')}\n` : '';
 
@@ -98,7 +105,7 @@ export async function composeFeedPost(args: {
   timeContext?: string;
 }): Promise<string> {
   const prompt =
-    `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    `${IN_WORLD}\nYou are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
     (args.timeContext ? `${args.timeContext}\n` : '') +
     `Write ONE short public post for the town feed (the town's "internet"), in your own voice ` +
     `and opinions, under 200 characters. ` +
@@ -124,7 +131,7 @@ export async function composeThought(args: {
   timeContext?: string;
 }): Promise<string> {
   const prompt =
-    `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    `${IN_WORLD}\nYou are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
     (args.timeContext ? `${args.timeContext}\n` : '') +
     `You're walking through town, alone with your thoughts. Write ONE short private thought ` +
     `you're having right now — first person, unfiltered, under 160 characters. It can be about ` +
@@ -147,7 +154,7 @@ export async function composeDirectMessage(args: {
   timeContext?: string;
 }): Promise<string> {
   const prompt =
-    `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    `${IN_WORLD}\nYou are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
     (args.timeContext ? `${args.timeContext}\n` : '') +
     `Write ONE short direct message to ${args.toName} (you can reach them even though they ` +
     `aren't nearby), under 200 characters, in your own voice. It might be a question, an ` +
