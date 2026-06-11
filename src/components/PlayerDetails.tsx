@@ -56,6 +56,13 @@ export default function PlayerDetails({
     playerId ? { worldId, playerId } : 'skip',
   );
 
+  const reputation = useQuery(api.relationships.listReputation, { worldId });
+  const rankedReputation = reputation ? [...reputation].sort((a, b) => b.prestige - a.prestige) : [];
+  const myPrestige = playerId ? reputation?.find((r) => r.playerId === playerId)?.prestige : undefined;
+  const myRank = playerId
+    ? rankedReputation.findIndex((r) => r.playerId === playerId) + 1
+    : 0;
+
   const playerDescription = playerId && game.playerDescriptions.get(playerId);
 
   const startConversation = useSendInput(engineId, 'startConversation');
@@ -268,9 +275,20 @@ export default function PlayerDetails({
           />
         </>
       )}
+      {typeof myPrestige === 'number' && (
+        <div className="box flex-grow mt-6">
+          <h2 className="bg-brown-700 text-base text-center">
+            ⭐ Standing in town: {myPrestige > 0 ? '+' : ''}
+            {myPrestige}
+            {myRank > 0 && rankedReputation.length > 1 && (
+              <span className="text-brown-300"> · #{myRank} of {rankedReputation.length}</span>
+            )}
+          </h2>
+        </div>
+      )}
       {relationships && relationships.length > 0 && (
         <>
-          <div className="box flex-grow mt-6">
+          <div className="box flex-grow mt-4">
             <h2 className="bg-brown-700 text-lg text-center">🫶 Relationships</h2>
           </div>
           <div className="mt-2 space-y-1">
