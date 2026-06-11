@@ -9,7 +9,6 @@ import { GameId, conversationId, playerId } from '../aiTown/ids';
 import { NUM_MEMORIES_TO_SEARCH } from '../constants';
 import { nearestPlace } from '../../data/places';
 import { timeOfDayPrompt, WorldTime } from '../../data/clock';
-import { IN_WORLD } from '../aiTown/agentComms';
 
 const selfInternal = internal.agent.conversation;
 
@@ -214,7 +213,6 @@ function agentPrompts(
 // Keep the (small, local) model from writing the other person's lines or stage directions.
 function dialogueStyle(playerName: string, otherName: string): string[] {
   return [
-    IN_WORLD,
     `Reply with ONE short line of dialogue spoken by ${playerName}, in the first person.`,
     `Do NOT write ${otherName}'s reply. Do NOT narrate actions or use stage directions or` +
       ` parentheticals like "(skeptical)" or "(starts typing)". Just say the line out loud.`,
