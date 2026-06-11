@@ -64,10 +64,19 @@ export const DELETE_BATCH_SIZE = 64;
 
 export const HUMAN_IDLE_TOO_LONG = 5 * 60 * 1000;
 
+// Generic idle activities, picked at random when an agent isn't in a conversation.
+// Kept broadly plausible for SF adults so any character can do any of them. Role- and
+// project-specific actions (e.g. "working on their project", "using their AI agent")
+// are an LLM-decided upgrade in the v1.1 mechanics chunk — see docs/V1.1-WORLD.md.
 export const ACTIVITIES = [
+  { description: 'grabbing coffee', emoji: '☕', duration: 60_000 },
+  { description: 'working on a project', emoji: '💻', duration: 90_000 },
+  { description: 'scrolling the news', emoji: '📱', duration: 45_000 },
+  { description: 'taking a walk', emoji: '🚶', duration: 60_000 },
   { description: 'reading a book', emoji: '📖', duration: 60_000 },
-  { description: 'daydreaming', emoji: '🤔', duration: 60_000 },
-  { description: 'gardening', emoji: '🥕', duration: 60_000 },
+  { description: 'sketching out an idea', emoji: '✏️', duration: 60_000 },
+  { description: 'on a phone call', emoji: '📞', duration: 45_000 },
+  { description: 'people-watching', emoji: '👀', duration: 45_000 },
 ];
 
 export const ENGINE_ACTION_DURATION = 30000;

@@ -8,11 +8,13 @@ directions AI development could grow toward. Forked from
 - **Run it on the Mac Mini (M4, 16GB):** [`docs/SETUP-MINI.md`](docs/SETUP-MINI.md)
 - **Upstream AI Town docs:** [`README.md`](README.md)
 
-## Status: v1.0 scaffolding
+## Status
 - [x] Forked AI Town base → private repo
-- [x] Starter HUMANS (3) in `data/characters.ts` (scale to 7 in v1.1)
-- [ ] Boot base loop on the Mini (Ollama + local 8B), view from laptop
-- [ ] v1.1 — add 4 model-typed AI agents (real APIs) + world feed + AI "cloud" zone
+- [x] Base loop running on the Mini (Ollama + local 8B), viewed from laptop ✅
+- [x] **v1.1 content** — 8-person SF-2026 cast, places, 14-day events timeline, richer
+      activities. Spec: [`docs/V1.1-WORLD.md`](docs/V1.1-WORLD.md)
+- [ ] **v1.1 mechanics** (chunks, test each on the Mini): A fields → B clock → E events →
+      C places → **D the AI-agent work loop** ⭐
 - [ ] v1.2 — Eve-lite memory layer (supersession, entity-scoped, hybrid recall, pinned)
 
 Build on git here; deploy to the Mini by cloning. See the design doc for the compute
