@@ -1,8 +1,17 @@
 import { v } from 'convex/values';
 import { internalAction, internalQuery } from '../_generated/server';
 import { WorldMap, serializedWorldMap } from './worldMap';
-import { chooseDestination } from '../../data/places';
+import { chooseDestination, workFor, nearestPlace } from '../../data/places';
 import { Phase, timeOfDayPrompt, WorldTime } from '../../data/clock';
+import {
+  wageFor,
+  mealCost,
+  MAX_FOOD,
+  FOOD_DRAIN,
+  HUNGRY_THRESHOLD,
+  MEAL_FOOD,
+  STARTING_MONEY,
+} from '../../data/economy';
 import { composeFeedPost, composeDirectMessage, composeThought } from './agentComms';
 import { fetchEmbedding } from '../util/llm';
 import { rememberConversation, reflectOnMemories } from '../agent/memory';
@@ -121,9 +130,15 @@ export const agentDoSomething = internalAction({
       const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, {
         worldId: args.worldId,
       });
-      // At night, sleep (the model goes idle + one overnight consolidation recharges energy).
-      // Skips all the waking behavior below.
-      if (await maybeSleep(ctx, args, now, time)) {
+      // Resolve who this is once (used for vitals/work and for choosing a destination).
+      const character = await ctx.runQuery(internal.aiTown.agentOperations.getCharacterName, {
+        worldId: args.worldId,
+        playerId: player.id,
+      });
+      // Tick needs + economy: sleep at night (+ overnight consolidation), otherwise drain
+      // energy/food, earn wages while working, and eat when hungry. Returns true if this tick
+      // was consumed (asleep or eating), in which case we skip the waking behavior below.
+      if (await tickVitals(ctx, args, now, time, character)) {
         return;
       }
       // First, on an idle tick, maybe publish to the feed or DM someone (rate-limited).
@@ -138,10 +153,6 @@ export const agentDoSomething = internalAction({
       if (recentActivity || justLeftConversation) {
         // Head toward a meaningful place driven by the time of day: work by day, the bar or
         // park in the evening, home at night. Falls back to wandering if we can't resolve who.
-        const character = await ctx.runQuery(internal.aiTown.agentOperations.getCharacterName, {
-          worldId: args.worldId,
-          playerId: player.id,
-        });
         const destination = character
           ? chooseDestination(character, map.width, map.height, time.phase)
           : wanderDestination(map);
@@ -268,51 +279,90 @@ async function finishWithActivity(
 const ENERGY_DRAIN = 4; // per waking idle decision
 const SLEEP_DURATION = 60_000; // re-decide ~once a minute while asleep (cheap; no LLM)
 
-async function maybeSleep(ctx: any, args: any, now: number, time: WorldTime): Promise<boolean> {
+// True if the agent is standing at their workplace (so working there earns their wage).
+function atWorkplace(character: string | null, pos?: { x: number; y: number }): boolean {
+  if (!character || !pos) return false;
+  const w = workFor(character);
+  if (!w) return false;
+  return Math.hypot(w.x - pos.x, w.y - pos.y) <= w.radius + 0.5;
+}
+
+async function tickVitals(
+  ctx: any,
+  args: any,
+  now: number,
+  time: WorldTime,
+  character: string | null,
+): Promise<boolean> {
   const vitals = await ctx.runQuery(internal.agentVitals.getVitals, {
     worldId: args.worldId,
     playerId: args.player.id,
   });
   const asleep = vitals?.asleep ?? false;
   const energy = vitals?.energy ?? MAX_ENERGY;
+  const food = vitals?.food ?? MAX_FOOD;
+  const money = vitals?.money ?? STARTING_MONEY;
   const lastDay = vitals?.lastConsolidatedDay ?? 0;
 
+  const set = (patch: any) =>
+    ctx.runMutation(internal.agentVitals.setVitals, {
+      worldId: args.worldId,
+      playerId: args.player.id,
+      ...patch,
+    });
+
+  // --- Night: sleep, with one overnight consolidation that recharges energy. ---
   if (time.phase === 'night') {
     if (!asleep) {
       if (lastDay !== time.day) {
-        // Overnight consolidation: one reflection pass, then fully recharged.
         await reflectOnMemories(ctx, args.worldId, args.player.id);
-        await ctx.runMutation(internal.agentVitals.setVitals, {
-          worldId: args.worldId,
-          playerId: args.player.id,
-          energy: MAX_ENERGY,
-          asleep: true,
-          lastConsolidatedDay: time.day,
-        });
+        await set({ energy: MAX_ENERGY, asleep: true, lastConsolidatedDay: time.day });
       } else {
-        await ctx.runMutation(internal.agentVitals.setVitals, {
-          worldId: args.worldId,
-          playerId: args.player.id,
-          asleep: true,
-        });
+        await set({ asleep: true });
       }
     }
     await finishWithActivity(ctx, args, 'asleep', '😴', now, SLEEP_DURATION);
     return true;
   }
 
-  // Daytime: wake up if needed, and drain a little energy for being up and about.
-  const patch: { asleep?: boolean; energy?: number } = {};
+  // --- Daytime: wake, drain energy + food, earn wages, eat when hungry. ---
+  const patch: any = {};
   if (asleep) patch.asleep = false;
-  const drained = Math.max(0, energy - ENERGY_DRAIN);
-  if (drained !== energy) patch.energy = drained;
-  if (Object.keys(patch).length) {
-    await ctx.runMutation(internal.agentVitals.setVitals, {
-      worldId: args.worldId,
-      playerId: args.player.id,
-      ...patch,
-    });
+  patch.energy = Math.max(0, energy - ENERGY_DRAIN);
+  let nextFood = Math.max(0, food - FOOD_DRAIN);
+  let nextMoney = money;
+
+  // Earn your wage for working your job during work hours.
+  if (time.phase === 'work' && atWorkplace(character, args.player.position)) {
+    nextMoney += wageFor(character!);
   }
+
+  // Hungry and can afford a meal? Eat right where you are (price depends on the venue).
+  if (nextFood <= HUNGRY_THRESHOLD) {
+    const place = args.player.position
+      ? nearestPlace(args.player.position.x, args.player.position.y)
+      : undefined;
+    const cost = mealCost(place?.type);
+    if (nextMoney >= cost) {
+      nextMoney -= cost;
+      nextFood = MEAL_FOOD;
+      patch.food = nextFood;
+      patch.money = nextMoney;
+      await set(patch);
+      await finishWithActivity(
+        ctx,
+        args,
+        place ? `eating at ${place.name}` : 'grabbing a bite',
+        '🍽️',
+        now,
+      );
+      return true;
+    }
+  }
+
+  patch.food = nextFood;
+  patch.money = nextMoney;
+  await set(patch);
   return false;
 }
 

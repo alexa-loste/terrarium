@@ -10,13 +10,27 @@ export type RosterEntry = {
   // v1.3 vitals: energy 0..100 and whether they're currently asleep.
   energy?: number;
   asleep?: boolean;
+  // v1.4 economy: food 0..100 and money (wallet).
+  food?: number;
+  money?: number;
 };
 
-// Energy bar color: green when rested, amber mid, red when running low.
-function energyColor(energy: number): string {
-  if (energy > 60) return 'bg-emerald-400';
-  if (energy > 30) return 'bg-amber-400';
+// Bar color: green when full, amber mid, red when running low.
+function barColor(value: number): string {
+  if (value > 60) return 'bg-emerald-400';
+  if (value > 30) return 'bg-amber-400';
   return 'bg-red-400';
+}
+
+function Bar({ value, color }: { value: number; color: string }) {
+  return (
+    <div className="h-1 w-10 overflow-hidden rounded-full bg-black/50">
+      <div
+        className={`h-full rounded-full ${color}`}
+        style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+      />
+    </div>
+  );
 }
 
 // Pull the front-facing ("down") frame out of a character's spritesheet so we can crop a
@@ -80,12 +94,19 @@ export default function CharacterRoster({
             </div>
             <span className="font-body text-[10px] leading-none text-white">{p.name}</span>
             {typeof p.energy === 'number' && (
-              <div className="h-1 w-10 overflow-hidden rounded-full bg-black/50" title={`Energy ${Math.round(p.energy)}%`}>
-                <div
-                  className={`h-full rounded-full ${energyColor(p.energy)}`}
-                  style={{ width: `${Math.max(0, Math.min(100, p.energy))}%` }}
-                />
+              <div title={`Energy ${Math.round(p.energy)}%`}>
+                <Bar value={p.energy} color={barColor(p.energy)} />
               </div>
+            )}
+            {typeof p.food === 'number' && (
+              <div title={`Food ${Math.round(p.food)}%`}>
+                <Bar value={p.food} color={barColor(p.food)} />
+              </div>
+            )}
+            {typeof p.money === 'number' && (
+              <span className="font-body text-[9px] leading-none text-emerald-300" title="Money">
+                ${Math.round(p.money)}
+              </span>
             )}
           </button>
         );

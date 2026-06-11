@@ -1,10 +1,11 @@
 import { v } from 'convex/values';
 import { internalMutation, internalQuery, query } from './_generated/server';
 import { playerId } from './aiTown/ids';
+import { MAX_FOOD, STARTING_MONEY } from '../data/economy';
 
-// Terrarium v1.3 — per-agent vitals: an energy bar that drains while awake and recharges by
-// sleeping. At night agents go idle (asleep) and run a single overnight consolidation
-// (reflectOnMemories), which recharges them. Read by the UI; written from agentOperations.
+// Terrarium v1.3/v1.4 — per-agent vitals + economy. Energy drains while awake and recharges
+// by sleeping (with one overnight consolidation). Food drains while awake and refills by
+// eating (costs money). Money is earned by working. Read by the UI; written from agentOperations.
 
 export const MAX_ENERGY = 100;
 
@@ -25,6 +26,8 @@ export const setVitals = internalMutation({
     energy: v.optional(v.number()),
     asleep: v.optional(v.boolean()),
     lastConsolidatedDay: v.optional(v.number()),
+    food: v.optional(v.number()),
+    money: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { worldId, playerId: pid, ...patch } = args;
@@ -41,6 +44,8 @@ export const setVitals = internalMutation({
         energy: patch.energy ?? MAX_ENERGY,
         asleep: patch.asleep ?? false,
         lastConsolidatedDay: patch.lastConsolidatedDay ?? 0,
+        food: patch.food ?? MAX_FOOD,
+        money: patch.money ?? STARTING_MONEY,
       });
     }
   },
@@ -54,6 +59,12 @@ export const listVitals = query({
       .query('agentVitals')
       .withIndex('playerId', (q) => q.eq('worldId', args.worldId))
       .collect();
-    return rows.map((r) => ({ playerId: r.playerId, energy: r.energy, asleep: r.asleep }));
+    return rows.map((r) => ({
+      playerId: r.playerId,
+      energy: r.energy,
+      asleep: r.asleep,
+      food: r.food ?? MAX_FOOD,
+      money: r.money ?? STARTING_MONEY,
+    }));
   },
 });

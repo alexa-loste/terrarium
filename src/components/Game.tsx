@@ -69,6 +69,8 @@ export default function Game() {
         status,
         energy: v?.energy,
         asleep: v?.asleep,
+        food: v?.food,
+        money: v?.money,
       };
     })
     .filter((e): e is NonNullable<typeof e> => !!e);

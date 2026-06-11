@@ -87,14 +87,17 @@ export default defineSchema({
     frozen: v.optional(v.boolean()),
   }).index('worldId', ['worldId']),
 
-  // Per-agent vitals (v1.3): an energy bar that drains while awake and recharges by sleeping.
-  // At night agents sleep (the model goes idle) and run one overnight consolidation (reflect).
+  // Per-agent vitals + economy (v1.3 energy/sleep, v1.4 food/money).
+  // energy drains while awake, recharges by sleeping; food drains while awake, refills by
+  // eating (which costs money); money is earned by working your job during work hours.
   agentVitals: defineTable({
     worldId: v.id('worlds'),
     playerId,
     energy: v.number(), // 0..100
     asleep: v.boolean(),
     lastConsolidatedDay: v.number(), // world-day index of the last overnight reflection
+    food: v.optional(v.number()), // 0..100
+    money: v.optional(v.number()),
   }).index('playerId', ['worldId', 'playerId']),
 
   ...agentTables,
