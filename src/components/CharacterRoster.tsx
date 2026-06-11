@@ -15,6 +15,8 @@ export type RosterEntry = {
   money?: number;
   // v1.5 social: 0..100 — feeling connected / supported / liked.
   social?: number;
+  // v1.5 reputation: standing in town (how others feel about them; can be negative).
+  prestige?: number;
 };
 
 // Bar color: green when full, amber mid, red when running low.
@@ -107,11 +109,22 @@ export default function CharacterRoster({
             {typeof p.social === 'number' && (
               <Bar icon="🫶" label="Social" value={p.social} color={barColor(p.social)} />
             )}
-            {typeof p.money === 'number' && (
-              <span className="font-body text-[9px] leading-none text-emerald-300" title="Money">
-                ${Math.round(p.money)}
-              </span>
-            )}
+            <div className="flex items-center gap-1.5">
+              {typeof p.money === 'number' && (
+                <span className="font-body text-[9px] leading-none text-emerald-300" title="Money">
+                  ${Math.round(p.money)}
+                </span>
+              )}
+              {typeof p.prestige === 'number' && (
+                <span
+                  className="font-body text-[9px] leading-none text-yellow-300"
+                  title="Standing in town"
+                >
+                  ⭐{p.prestige > 0 ? '+' : ''}
+                  {Math.round(p.prestige)}
+                </span>
+              )}
+            </div>
           </button>
         );
       })}

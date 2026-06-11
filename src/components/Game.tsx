@@ -39,6 +39,7 @@ export default function Game() {
   const { historicalTime, timeManager } = useHistoricalTime(worldState?.engine);
 
   const vitals = useQuery(api.agentVitals.listVitals, worldId ? { worldId } : 'skip');
+  const reputation = useQuery(api.relationships.listReputation, worldId ? { worldId } : 'skip');
 
   const scrollViewRef = useRef<HTMLDivElement>(null);
 
@@ -49,6 +50,7 @@ export default function Game() {
   const conversations = [...game.world.conversations.values()];
   const agents = [...game.world.agents.values()];
   const vitalsById = new Map((vitals ?? []).map((v) => [v.playerId, v]));
+  const prestigeById = new Map((reputation ?? []).map((r) => [r.playerId, r.prestige]));
   const roster = [...game.world.players.values()]
     .map((p) => {
       const d = game.playerDescriptions.get(p.id);
@@ -72,6 +74,7 @@ export default function Game() {
         food: v?.food,
         money: v?.money,
         social: v?.social,
+        prestige: prestigeById.get(p.id),
       };
     })
     .filter((e): e is NonNullable<typeof e> => !!e);
