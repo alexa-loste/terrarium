@@ -48,6 +48,7 @@ export const commsContext = internalQuery({
       others,
       lastFeedPostAt: state?.lastFeedPostAt ?? 0,
       lastDmAt: state?.lastDmAt ?? 0,
+      lastThoughtAt: state?.lastThoughtAt ?? 0,
     };
   },
 });
@@ -56,7 +57,7 @@ async function upsertState(
   ctx: any,
   worldId: string,
   pid: string,
-  patch: { lastFeedPostAt?: number; lastDmAt?: number },
+  patch: { lastFeedPostAt?: number; lastDmAt?: number; lastThoughtAt?: number },
 ) {
   const existing = await ctx.db
     .query('agentCommsState')
@@ -74,6 +75,11 @@ export const recordFeedPost = internalMutation({
 export const recordDm = internalMutation({
   args: { worldId: v.id('worlds'), playerId, at: v.number() },
   handler: (ctx, args) => upsertState(ctx, args.worldId, args.playerId, { lastDmAt: args.at }),
+});
+
+export const recordThought = internalMutation({
+  args: { worldId: v.id('worlds'), playerId, at: v.number() },
+  handler: (ctx, args) => upsertState(ctx, args.worldId, args.playerId, { lastThoughtAt: args.at }),
 });
 
 function cleanLine(s: string): string {
@@ -103,6 +109,30 @@ export async function composeFeedPost(args: {
   const { content } = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
     max_tokens: 120,
+    stop: ['\n\n'],
+  });
+  return cleanLine(content);
+}
+
+// An unprompted inner thought — first-person, fleeting, grounded in what's recently been on
+// their mind and what they're doing right now. Their private stream of consciousness (v1.3).
+export async function composeThought(args: {
+  name: string;
+  identity: string;
+  plan: string;
+  memories: string[];
+  timeContext?: string;
+}): Promise<string> {
+  const prompt =
+    `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    (args.timeContext ? `${args.timeContext}\n` : '') +
+    `You're walking through town, alone with your thoughts. Write ONE short private thought ` +
+    `you're having right now — first person, unfiltered, under 160 characters. It can be about ` +
+    `someone, your work, something you noticed or are worried or excited about, or just a passing ` +
+    `mood. Not addressed to anyone. No quotation marks. Output only the thought.\nThought:`;
+  const { content } = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 100,
     stop: ['\n\n'],
   });
   return cleanLine(content);

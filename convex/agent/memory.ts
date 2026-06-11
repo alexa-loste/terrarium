@@ -88,6 +88,20 @@ export async function rememberConversation(
     embedding,
   });
   await reflectOnMemories(ctx, worldId, playerId);
+  // Record the gist in the Town Chronicle (v1.3) so conversations are followable at a glance.
+  // Both participants summarize independently; log only one side (deterministic by id) so the
+  // chronicle gets exactly one entry per conversation rather than two near-duplicate POVs.
+  if (player.id < otherPlayer.id) {
+    await ctx.runMutation(internal.townLog.recordEvent, {
+      worldId,
+      kind: 'conversation',
+      summary: content,
+      playerId: player.id,
+      playerName: player.name,
+      subjectName: otherPlayer.name,
+      emoji: '💬',
+    });
+  }
   return description;
 }
 

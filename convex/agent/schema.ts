@@ -37,6 +37,10 @@ export const memoryFields = {
       type: v.literal('directMessage'),
       messageId: v.id('directMessages'),
     }),
+    // An unprompted inner thought the player had while going about their day (v1.3).
+    v.object({
+      type: v.literal('thought'),
+    }),
   ),
 };
 export const memoryTables = {

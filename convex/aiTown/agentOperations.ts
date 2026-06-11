@@ -3,7 +3,8 @@ import { internalAction, internalQuery } from '../_generated/server';
 import { WorldMap, serializedWorldMap } from './worldMap';
 import { chooseDestination } from '../../data/places';
 import { Phase, timeOfDayPrompt, WorldTime } from '../../data/clock';
-import { composeFeedPost, composeDirectMessage } from './agentComms';
+import { composeFeedPost, composeDirectMessage, composeThought } from './agentComms';
+import { fetchEmbedding } from '../util/llm';
 import { rememberConversation } from '../agent/memory';
 import { GameId, agentId, conversationId, playerId } from './ids';
 import {
@@ -124,6 +125,10 @@ export const agentDoSomething = internalAction({
       if (await maybeDoComms(ctx, args, now, time)) {
         return;
       }
+      // Otherwise, maybe just have a passing thought (their stream of consciousness, v1.3).
+      if (await maybeThink(ctx, args, now, time)) {
+        return;
+      }
       if (recentActivity || justLeftConversation) {
         // Head toward a meaningful place driven by the time of day: work by day, the bar or
         // park in the evening, home at night. Falls back to wandering if we can't resolve who.
@@ -223,6 +228,13 @@ const DM_COOLDOWN = 5 * 60_000;
 const FEED_POST_CHANCE = 0.1;
 const DM_CHANCE = 0.06;
 const RESEARCHERS = new Set(['Mara', 'Priya', 'Naomi']);
+
+// Inner monologue (v1.3): a fleeting private thought now and then while idle. Cheap — one
+// LLM call + one embedding, fixed low importance (no importance LLM call). It becomes a
+// low-salience memory (so it can feed reflection) and a line in the Town Chronicle.
+const THOUGHT_COOLDOWN = 90_000;
+const THOUGHT_CHANCE = 0.25;
+const THOUGHT_IMPORTANCE = 3;
 
 async function finishWithActivity(
   ctx: any,
@@ -329,6 +341,53 @@ async function maybeDoComms(ctx: any, args: any, now: number, time: WorldTime): 
     }
   }
   return false;
+}
+
+async function maybeThink(ctx: any, args: any, now: number, time: WorldTime): Promise<boolean> {
+  if (Math.random() >= THOUGHT_CHANCE) return false;
+  const cc = await ctx.runQuery(internal.aiTown.agentComms.commsContext, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+  });
+  if (!cc) return false;
+  if (now - cc.lastThoughtAt < THOUGHT_COOLDOWN) return false;
+
+  const text = await composeThought({
+    name: cc.name,
+    identity: cc.identity,
+    plan: cc.plan,
+    memories: cc.memories,
+    timeContext: timeOfDayPrompt(time),
+  });
+  if (!text) return false;
+
+  // Store as a low-salience memory so it can still surface / feed reflection.
+  const { embedding } = await fetchEmbedding(text);
+  const agent = args.agent;
+  await ctx.runMutation(internal.agent.memory.insertMemory, {
+    agentId: agent.id,
+    playerId: args.player.id,
+    description: `I thought to myself: ${text}`,
+    importance: THOUGHT_IMPORTANCE,
+    lastAccess: now,
+    data: { type: 'thought' },
+    embedding,
+  });
+  await ctx.runMutation(internal.aiTown.agentComms.recordThought, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+    at: now,
+  });
+  await ctx.runMutation(internal.townLog.recordEvent, {
+    worldId: args.worldId,
+    kind: 'thought',
+    summary: text,
+    playerId: args.player.id,
+    playerName: cc.name,
+    emoji: '💭',
+  });
+  await finishWithActivity(ctx, args, 'lost in thought', '💭', now);
+  return true;
 }
 
 // Resolve a player's display name (e.g. "Mara") so navigation can pick their home/workplace.

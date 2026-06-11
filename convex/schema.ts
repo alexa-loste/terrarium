@@ -45,13 +45,37 @@ export default defineSchema({
     .index('to', ['worldId', 'toPlayerId'])
     .index('from', ['worldId', 'fromPlayerId']),
 
-  // Per-agent rate-limit cursors for posting / messaging (v1.2 Steps 3-4).
+  // Per-agent rate-limit cursors for posting / messaging / thinking (v1.2 Steps 3-4, v1.3).
   agentCommsState: defineTable({
     worldId: v.id('worlds'),
     playerId,
     lastFeedPostAt: v.optional(v.number()),
     lastDmAt: v.optional(v.number()),
+    lastThoughtAt: v.optional(v.number()),
   }).index('playerId', ['worldId', 'playerId']),
+
+  // The Town Chronicle (v1.3): a god-view stream of gisted events — inner thoughts,
+  // conversation summaries, feed posts, and (later) relationship + artifact updates.
+  // The observer's readable digest; written from the existing event hooks.
+  townEvents: defineTable({
+    worldId: v.id('worlds'),
+    ts: v.number(),
+    kind: v.union(
+      v.literal('thought'),
+      v.literal('conversation'),
+      v.literal('feed'),
+      v.literal('relationship'),
+      v.literal('artifact'),
+      v.literal('system'),
+    ),
+    // The agent at the center of the event, if any.
+    playerId: v.optional(playerId),
+    playerName: v.optional(v.string()),
+    // A second party (e.g. the other side of a conversation).
+    subjectName: v.optional(v.string()),
+    emoji: v.optional(v.string()),
+    summary: v.string(),
+  }).index('worldId', ['worldId', 'ts']),
 
   // The anchored day/night clock (v1.3). One row per world; see data/clock.ts + convex/clock.ts.
   worldClock: defineTable({

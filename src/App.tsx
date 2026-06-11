@@ -12,16 +12,14 @@ import Button from './components/buttons/Button.tsx';
 import InteractButton from './components/buttons/InteractButton.tsx';
 import FreezeButton from './components/FreezeButton.tsx';
 import { MAX_HUMAN_PLAYERS } from '../convex/constants.ts';
-import PoweredByConvex from './components/PoweredByConvex.tsx';
 import FeedPanel from './components/FeedPanel.tsx';
+import ChroniclePanel from './components/ChroniclePanel.tsx';
 
 export default function Home() {
   const [helpModalOpen, setHelpModalOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
   return (
     <main className="relative flex h-screen w-screen flex-col font-body game-background overflow-hidden">
-      <PoweredByConvex />
-
       <ReactModal
         isOpen={helpModalOpen}
         onRequestClose={() => setHelpModalOpen(false)}
@@ -74,6 +72,7 @@ export default function Home() {
       <div className="w-full grow min-h-0 relative isolate overflow-hidden flex flex-col">
         <Game />
         <FeedPanel />
+        <ChroniclePanel />
 
         <footer className="pointer-events-none absolute bottom-3 left-3 z-30 flex flex-col items-start gap-2">
           {controlsOpen && (

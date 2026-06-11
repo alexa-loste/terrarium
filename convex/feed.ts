@@ -40,6 +40,16 @@ export const postToFeed = mutation({
       text,
       createdAt: Date.now(),
     });
+    // Mirror into the Town Chronicle (v1.3) so the feed shows up in the god-view log.
+    await ctx.db.insert('townEvents', {
+      worldId: args.worldId,
+      ts: Date.now(),
+      kind: 'feed',
+      playerId: args.authorPlayerId ?? undefined,
+      playerName: args.authorName,
+      emoji: args.kind === 'research' ? '🔬' : args.kind === 'news' ? '📰' : '🗣️',
+      summary: text,
+    });
     // Deliver the post into every agent's memory stream so the town perceives it (Step 2).
     await ctx.scheduler.runAfter(0, internal.agent.memory.deliverFeedPost, {
       worldId: args.worldId,
