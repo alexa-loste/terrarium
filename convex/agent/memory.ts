@@ -88,14 +88,16 @@ export async function rememberConversation(
     embedding,
   });
   await reflectOnMemories(ctx, worldId, playerId);
-  // Record the gist in the Town Chronicle (v1.3) so conversations are followable at a glance.
-  // Both participants summarize independently; log only one side (deterministic by id) so the
-  // chronicle gets exactly one entry per conversation rather than two near-duplicate POVs.
+  // Record the gist in the Town Chronicle (v1.3). Rather than reuse a participant's long,
+  // performative first-person memory summary, a neutral town-chronicler voice writes a short
+  // third-person gist of what happened + how the two now feel about each other. Both
+  // participants run this function, so only one side (deterministic by id) writes the entry.
   if (player.id < otherPlayer.id) {
+    const gist = await narrateConversation(player, otherPlayer, messages);
     await ctx.runMutation(internal.townLog.recordEvent, {
       worldId,
       kind: 'conversation',
-      summary: content,
+      summary: gist,
       playerId: player.id,
       playerName: player.name,
       subjectName: otherPlayer.name,
@@ -103,6 +105,50 @@ export async function rememberConversation(
     });
   }
   return description;
+}
+
+// The town chronicler's voice: a brief, neutral, third-person gist of a finished conversation
+// and the relational temperature it left behind. Deliberately NOT first-person or performative.
+async function narrateConversation(
+  player: { id: string; name: string },
+  otherPlayer: { id: string; name: string },
+  messages: Doc<'messages'>[],
+): Promise<string> {
+  const transcript = messages
+    .map((m) => `${m.author === player.id ? player.name : otherPlayer.name}: ${m.text}`)
+    .join('\n');
+  const { content } = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content:
+          `You are the town chronicler, keeping a terse log of life in town. ` +
+          `${player.name} and ${otherPlayer.name} just finished this conversation:\n\n${transcript}\n\n` +
+          `Write ONE or TWO short sentences, third person, plainly stating what they talked about ` +
+          `and how they seem to feel about each other afterward (e.g. warmer, allied, tense, ` +
+          `unimpressed, closer). Be concrete and a little dry. No quotes, no flourish. Under 220 ` +
+          `characters.\nLog entry:`,
+      },
+    ],
+    max_tokens: 160,
+  });
+  const cleaned = content
+    .replace(/^\s*(log entry|entry)\s*:?\s*/i, '')
+    .replace(/^["'\s]+|["'\s]+$/g, '')
+    .trim();
+  // Loose safety net only — let a normal 1-2 sentence gist through whole; trim true runaways.
+  return hardCap(cleaned, 360);
+}
+
+// Keep chronicle entries scannable even if the local model rambles past the asked length:
+// cut at the last sentence end within the cap, else the last word boundary, then ellipsize.
+function hardCap(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const slice = s.slice(0, max);
+  const lastStop = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('! '), slice.lastIndexOf('? '));
+  if (lastStop > max * 0.5) return slice.slice(0, lastStop + 1);
+  const lastSpace = slice.lastIndexOf(' ');
+  return (lastSpace > max * 0.5 ? slice.slice(0, lastSpace) : slice).trimEnd() + '…';
 }
 
 // v1.2 Step 2 — perception of the town feed.

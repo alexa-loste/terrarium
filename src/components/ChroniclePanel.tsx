@@ -28,7 +28,7 @@ export default function ChroniclePanel() {
       <button
         onClick={() => setOpen((o) => !o)}
         title="The Town Chronicle"
-        className="pointer-events-auto absolute left-3 top-14 z-40 flex items-center gap-2 rounded-full border-2 border-brown-900 bg-clay-700 px-3 py-1.5 text-sm text-white shadow-solid"
+        className="pointer-events-auto absolute right-36 top-3 z-40 flex items-center gap-2 rounded-full border-2 border-brown-900 bg-clay-700 px-3 py-1.5 text-sm text-white shadow-solid"
       >
         📖 Chronicle
         {events && events.length > 0 && (
@@ -74,17 +74,6 @@ export default function ChroniclePanel() {
                     className={`mt-0.5 whitespace-pre-wrap text-sm leading-snug ${
                       e.kind === 'thought' ? 'italic text-brown-200' : ''
                     }`}
-                    style={
-                      // Conversation gists are long paragraphs — clamp them to keep the log scannable.
-                      e.kind === 'conversation'
-                        ? {
-                            display: '-webkit-box',
-                            WebkitLineClamp: 4,
-                            WebkitBoxOrient: 'vertical',
-                            overflow: 'hidden',
-                          }
-                        : undefined
-                    }
                   >
                     {e.summary}
                   </div>
