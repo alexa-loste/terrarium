@@ -12,7 +12,8 @@ import {
   MEAL_FOOD,
   STARTING_MONEY,
 } from '../../data/economy';
-import { composeFeedPost, composeDirectMessage, composeThought } from './agentComms';
+import { composeFeedPost, composeDirectMessage, composeThought, composeArtifact } from './agentComms';
+import { workOutputFor } from '../../data/artifacts';
 import { fetchEmbedding } from '../util/llm';
 import { rememberConversation, reflectOnMemories } from '../agent/memory';
 import { MAX_ENERGY, START_SOCIAL } from '../agentVitals';
@@ -145,6 +146,11 @@ export const agentDoSomething = internalAction({
       if (await tickVitals(ctx, args, now, time, character, vitals)) {
         return;
       }
+      // While actually at work during work hours, sometimes produce a real artifact — a
+      // research note, policy memo, article, artwork, etc. (their job's tangible output).
+      if (await maybeMakeArtifact(ctx, args, now, time, character)) {
+        return;
+      }
       // First, on an idle tick, maybe publish to the feed or DM someone (rate-limited). A lonely
       // agent (low social) reaches out more. Placed before the wander/activity gates.
       if (await maybeDoComms(ctx, args, now, time, vitals)) {
@@ -256,6 +262,14 @@ const RESEARCHERS = new Set(['Mara', 'Priya', 'Naomi']);
 const THOUGHT_COOLDOWN = 90_000;
 const THOUGHT_CHANCE = 0.25;
 const THOUGHT_IMPORTANCE = 3;
+
+// Real work output (v1.6): while at your workplace during work hours, you sometimes produce an
+// artifact — your job's tangible output. Gated by work-phase + being at your workplace, plus a
+// cooldown + chance, so it's a few pieces per work day. Each is one LLM call + one embedding,
+// and the artifact is a salient memory (so it feeds reflection and shows in the Library).
+const ARTIFACT_COOLDOWN = 7 * 60_000;
+const ARTIFACT_CHANCE = 0.22;
+const ARTIFACT_IMPORTANCE = 7;
 
 async function finishWithActivity(
   ctx: any,
@@ -525,6 +539,95 @@ async function maybeThink(ctx: any, args: any, now: number, time: WorldTime): Pr
     emoji: '💭',
   });
   await finishWithActivity(ctx, args, 'lost in thought', '💭', now);
+  return true;
+}
+
+// Produce a real artifact while working (v1.6). Only fires during work hours when the agent is
+// physically at their workplace; rate-limited by ARTIFACT_COOLDOWN + ARTIFACT_CHANCE. The LLM
+// writes role-specific work (data/artifacts.ts), seeded with a few recently-published town
+// pieces so it can respond to them — a discourse chain. Persists to the Library, logs to the
+// Chronicle, and becomes a salient memory. Returns true if it produced one (tick consumed).
+async function maybeMakeArtifact(
+  ctx: any,
+  args: any,
+  now: number,
+  time: WorldTime,
+  character: string | null,
+): Promise<boolean> {
+  if (time.phase !== 'work' || !character) return false;
+  if (!atWorkplace(character, args.player.position)) return false;
+  if (Math.random() >= ARTIFACT_CHANCE) return false;
+
+  const cc = await ctx.runQuery(internal.aiTown.agentComms.commsContext, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+  });
+  if (!cc) return false;
+  if (now - cc.lastArtifactAt < ARTIFACT_COOLDOWN) return false;
+
+  const output = workOutputFor(character);
+  const place = args.player.position
+    ? nearestPlace(args.player.position.x, args.player.position.y)
+    : undefined;
+  const recent = await ctx.runQuery(api.artifacts.recentForContext, {
+    worldId: args.worldId,
+    limit: 5,
+  });
+
+  const piece = await composeArtifact({
+    name: cc.name,
+    identity: cc.identity,
+    plan: cc.plan,
+    brief: output.brief,
+    workType: output.workType,
+    memories: cc.memories,
+    recent,
+    placeName: place?.name,
+    timeContext: timeOfDayPrompt(time),
+  });
+  if (!piece) return false;
+
+  await ctx.runMutation(internal.artifacts.createArtifact, {
+    worldId: args.worldId,
+    authorPlayerId: args.player.id,
+    authorName: cc.name,
+    workType: output.workType,
+    emoji: output.emoji,
+    title: piece.title,
+    body: piece.body,
+    respondsTo: piece.respondsTo,
+    placeName: place?.name,
+    day: time.day,
+  });
+
+  // A salient memory of having made it, so it feeds reflection and future work.
+  const memText = `I made a ${output.workType}: "${piece.title}". ${piece.body}`;
+  const { embedding } = await fetchEmbedding(memText);
+  await ctx.runMutation(internal.agent.memory.insertMemory, {
+    agentId: args.agent.id,
+    playerId: args.player.id,
+    description: memText,
+    importance: ARTIFACT_IMPORTANCE,
+    lastAccess: now,
+    data: { type: 'reflection', relatedMemoryIds: [] },
+    embedding,
+  });
+
+  await ctx.runMutation(internal.aiTown.agentComms.recordArtifact, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+    at: now,
+  });
+  const respond = piece.respondsTo ? ` (responding to "${piece.respondsTo}")` : '';
+  await ctx.runMutation(internal.townLog.recordEvent, {
+    worldId: args.worldId,
+    kind: 'artifact',
+    summary: `${cc.name} made a ${output.workType}: "${piece.title}"${respond}`,
+    playerId: args.player.id,
+    playerName: cc.name,
+    emoji: output.emoji,
+  });
+  await finishWithActivity(ctx, args, output.activity, output.emoji, now, 60_000);
   return true;
 }
 

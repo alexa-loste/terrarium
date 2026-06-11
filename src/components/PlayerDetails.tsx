@@ -56,6 +56,11 @@ export default function PlayerDetails({
     playerId ? { worldId, playerId } : 'skip',
   );
 
+  const works = useQuery(
+    api.artifacts.listByAuthor,
+    playerId ? { worldId, authorPlayerId: playerId } : 'skip',
+  );
+
   const reputation = useQuery(api.relationships.listReputation, { worldId });
   const rankedReputation = reputation ? [...reputation].sort((a, b) => b.prestige - a.prestige) : [];
   const myPrestige = playerId ? reputation?.find((r) => r.playerId === playerId)?.prestige : undefined;
@@ -309,6 +314,33 @@ export default function PlayerDetails({
                 </div>
               );
             })}
+          </div>
+        </>
+      )}
+      {works && works.length > 0 && (
+        <>
+          <div className="box flex-grow mt-4">
+            <h2 className="bg-brown-700 text-lg text-center">
+              📚 Works <span className="text-brown-300 text-sm">({works.length})</span>
+            </h2>
+          </div>
+          <div className="mt-2 space-y-1">
+            {works.slice(0, 8).map((w) => (
+              <div key={w._id} className="bg-brown-700 px-2 py-1 text-sm">
+                <div className="flex items-baseline gap-1.5">
+                  <span>{w.emoji}</span>
+                  <span className="font-bold leading-tight">{w.title}</span>
+                  <span className="ml-auto text-[10px] text-brown-300">day {w.day}</span>
+                </div>
+                <div className="text-xs text-brown-200">{w.workType}</div>
+                <p className="mt-0.5 whitespace-pre-wrap text-xs leading-snug text-brown-100">
+                  {w.body}
+                </p>
+                {w.respondsTo && (
+                  <div className="mt-0.5 text-[11px] italic text-brown-300">↳ re: {w.respondsTo}</div>
+                )}
+              </div>
+            ))}
           </div>
         </>
       )}

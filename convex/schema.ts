@@ -52,7 +52,31 @@ export default defineSchema({
     lastFeedPostAt: v.optional(v.number()),
     lastDmAt: v.optional(v.number()),
     lastThoughtAt: v.optional(v.number()),
+    lastArtifactAt: v.optional(v.number()),
   }).index('playerId', ['worldId', 'playerId']),
+
+  // Real work output (v1.6): when an agent works their job they sometimes produce a genuine,
+  // role-specific artifact — a research note, policy memo, article, artwork, case note, etc.
+  // The LLM writes real content; it persists here (surviving memory-gisting), shows in the
+  // town Library, becomes a memory for the author, and can respond to what others published —
+  // a discourse / progress chain. See data/artifacts.ts + convex/artifacts.ts.
+  artifacts: defineTable({
+    worldId: v.id('worlds'),
+    authorPlayerId: playerId,
+    authorName: v.string(),
+    // The kind of work this is, from data/artifacts.ts (e.g. 'research note', 'policy memo').
+    workType: v.string(),
+    emoji: v.string(),
+    title: v.string(),
+    body: v.string(),
+    // The title of the recent town artifact this one responds to / builds on, if any.
+    respondsTo: v.optional(v.string()),
+    placeName: v.optional(v.string()),
+    day: v.number(), // world-day index it was made
+    createdAt: v.number(),
+  })
+    .index('worldId', ['worldId'])
+    .index('author', ['worldId', 'authorPlayerId']),
 
   // The Town Chronicle (v1.3): a god-view stream of gisted events — inner thoughts,
   // conversation summaries, feed posts, and (later) relationship + artifact updates.

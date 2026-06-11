@@ -14,6 +14,7 @@ import FreezeButton from './components/FreezeButton.tsx';
 import { MAX_HUMAN_PLAYERS } from '../convex/constants.ts';
 import FeedPanel from './components/FeedPanel.tsx';
 import ChroniclePanel from './components/ChroniclePanel.tsx';
+import LibraryPanel from './components/LibraryPanel.tsx';
 
 export default function Home() {
   const [helpModalOpen, setHelpModalOpen] = useState(false);
@@ -73,6 +74,7 @@ export default function Home() {
         <Game />
         <FeedPanel />
         <ChroniclePanel />
+        <LibraryPanel />
 
         <footer className="pointer-events-none absolute bottom-3 left-3 z-30 flex flex-col items-start gap-2">
           {controlsOpen && (

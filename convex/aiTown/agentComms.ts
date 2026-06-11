@@ -49,6 +49,7 @@ export const commsContext = internalQuery({
       lastFeedPostAt: state?.lastFeedPostAt ?? 0,
       lastDmAt: state?.lastDmAt ?? 0,
       lastThoughtAt: state?.lastThoughtAt ?? 0,
+      lastArtifactAt: state?.lastArtifactAt ?? 0,
     };
   },
 });
@@ -57,7 +58,7 @@ async function upsertState(
   ctx: any,
   worldId: string,
   pid: string,
-  patch: { lastFeedPostAt?: number; lastDmAt?: number; lastThoughtAt?: number },
+  patch: { lastFeedPostAt?: number; lastDmAt?: number; lastThoughtAt?: number; lastArtifactAt?: number },
 ) {
   const existing = await ctx.db
     .query('agentCommsState')
@@ -80,6 +81,11 @@ export const recordDm = internalMutation({
 export const recordThought = internalMutation({
   args: { worldId: v.id('worlds'), playerId, at: v.number() },
   handler: (ctx, args) => upsertState(ctx, args.worldId, args.playerId, { lastThoughtAt: args.at }),
+});
+
+export const recordArtifact = internalMutation({
+  args: { worldId: v.id('worlds'), playerId, at: v.number() },
+  handler: (ctx, args) => upsertState(ctx, args.worldId, args.playerId, { lastArtifactAt: args.at }),
 });
 
 function cleanLine(s: string): string {
@@ -159,4 +165,53 @@ export async function composeDirectMessage(args: {
     stop: ['\n\n'],
   });
   return cleanLine(content);
+}
+
+// v1.6 — produce a real piece of work (artifact). The brief comes from data/artifacts.ts and
+// is role-specific; `recent` is a few things the town has lately published so this work can
+// respond to / build on the discourse. Returns a parsed { title, body } or null on failure.
+export async function composeArtifact(args: {
+  name: string;
+  identity: string;
+  plan: string;
+  brief: string;
+  workType: string;
+  memories: string[];
+  recent: { authorName: string; workType: string; title: string }[];
+  placeName?: string;
+  timeContext?: string;
+}): Promise<{ title: string; body: string; respondsTo?: string } | null> {
+  const recentBlock = args.recent.length
+    ? `Recently published around town (you may build on, cite, or push back on one of these):\n` +
+      args.recent.map((r) => `- ${r.authorName}'s ${r.workType}: "${r.title}"`).join('\n') +
+      '\n'
+    : '';
+  const prompt =
+    `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    (args.placeName ? `You're working at ${args.placeName}.\n` : '') +
+    (args.timeContext ? `${args.timeContext}\n` : '') +
+    recentBlock +
+    `Produce a real piece of work — ${args.brief}\n` +
+    `Give it a TITLE (under 70 characters) and a BODY of 2-4 sentences. Write it for real, in ` +
+    `your own voice and point of view — not a description of writing it. ` +
+    `If you are responding to someone's recent work above, name them in the body.\n` +
+    `Format EXACTLY as:\nTITLE: <the title>\nBODY: <the body>`;
+  const { content } = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 320,
+  });
+  const titleMatch = content.match(/TITLE:\s*(.+?)(?:\n|$)/i);
+  const bodyMatch = content.match(/BODY:\s*([\s\S]+)$/i);
+  if (!bodyMatch) return null;
+  const title = (titleMatch?.[1] ?? `${args.name}'s ${args.workType}`)
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .slice(0, 90);
+  const body = bodyMatch[1].trim().replace(/^["']|["']$/g, '').slice(0, 900);
+  if (!body) return null;
+  // Did this work respond to a recent piece? Note the first recent title it names.
+  const respondsTo = args.recent.find(
+    (r) => body.includes(r.authorName) && r.authorName !== args.name,
+  )?.title;
+  return { title, body, respondsTo };
 }
