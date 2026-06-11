@@ -27,6 +27,11 @@ export const memoryFields = {
       type: v.literal('reflection'),
       relatedMemoryIds: v.array(v.id('memories')),
     }),
+    // A post the player perceived on the town feed (v1.2 Step 2).
+    v.object({
+      type: v.literal('feedPost'),
+      postId: v.id('feedPosts'),
+    }),
   ),
 };
 export const memoryTables = {

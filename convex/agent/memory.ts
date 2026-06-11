@@ -1,5 +1,11 @@
 import { v } from 'convex/values';
-import { ActionCtx, DatabaseReader, internalMutation, internalQuery } from '../_generated/server';
+import {
+  ActionCtx,
+  DatabaseReader,
+  internalAction,
+  internalMutation,
+  internalQuery,
+} from '../_generated/server';
 import { Doc, Id } from '../_generated/dataModel';
 import { internal } from '../_generated/api';
 import { LLMMessage, chatCompletion, fetchEmbedding } from '../util/llm';
@@ -84,6 +90,62 @@ export async function rememberConversation(
   await reflectOnMemories(ctx, worldId, playerId);
   return description;
 }
+
+// v1.2 Step 2 — perception of the town feed.
+// When a post is created, it's delivered to every agent's memory stream as an observation,
+// exactly like the paper treats perceived events: it then rides the normal retrieval ->
+// dialogue path (relatedMemoriesPrompt) and can be referenced in later conversations.
+function feedObservation(post: { authorName: string; kind: string; text: string }): string {
+  if (post.kind === 'news') return `I saw on the town feed: ${post.text}`;
+  if (post.kind === 'research') {
+    return `${post.authorName} published research on the town feed: "${post.text}"`;
+  }
+  return `${post.authorName} posted on the town feed: "${post.text}"`;
+}
+
+export const loadFeedDelivery = internalQuery({
+  args: { worldId: v.id('worlds'), postId: v.id('feedPosts') },
+  handler: async (ctx, args) => {
+    const post = await ctx.db.get(args.postId);
+    if (!post) return null;
+    const world = await ctx.db.get(args.worldId);
+    if (!world) return null;
+    const recipients: { agentId: string; playerId: string }[] = [];
+    for (const agent of world.agents) {
+      // Don't deliver a post back to its own author (agent posting comes in Step 3).
+      if (post.authorPlayerId && agent.playerId === post.authorPlayerId) continue;
+      recipients.push({ agentId: agent.id, playerId: agent.playerId });
+    }
+    return {
+      post: { authorName: post.authorName, kind: post.kind, text: post.text },
+      recipients,
+    };
+  },
+});
+
+export const deliverFeedPost = internalAction({
+  args: { worldId: v.id('worlds'), postId: v.id('feedPosts') },
+  handler: async (ctx, args) => {
+    const data = await ctx.runQuery(selfInternal.loadFeedDelivery, args);
+    if (!data || data.recipients.length === 0) return;
+    const description = feedObservation(data.post);
+    // Importance + embedding are identical across recipients, so compute once.
+    const importance = await calculateImportance(description);
+    const { embedding } = await fetchEmbedding(description);
+    const now = Date.now();
+    for (const r of data.recipients) {
+      await ctx.runMutation(selfInternal.insertMemory, {
+        agentId: r.agentId as GameId<'agents'>,
+        playerId: r.playerId as GameId<'players'>,
+        description,
+        importance,
+        lastAccess: now,
+        data: { type: 'feedPost', postId: args.postId },
+        embedding,
+      });
+    }
+  },
+});
 
 export const loadConversation = internalQuery({
   args: {
