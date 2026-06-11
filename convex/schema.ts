@@ -32,6 +32,27 @@ export default defineSchema({
     createdAt: v.number(),
   }).index('worldId', ['worldId']),
 
+  // Async direct messages between agents (v1.2 Step 4) — delivered regardless of distance.
+  directMessages: defineTable({
+    worldId: v.id('worlds'),
+    fromPlayerId: playerId,
+    fromName: v.string(),
+    toPlayerId: playerId,
+    text: v.string(),
+    createdAt: v.number(),
+    readAt: v.union(v.number(), v.null()),
+  })
+    .index('to', ['worldId', 'toPlayerId'])
+    .index('from', ['worldId', 'fromPlayerId']),
+
+  // Per-agent rate-limit cursors for posting / messaging (v1.2 Steps 3-4).
+  agentCommsState: defineTable({
+    worldId: v.id('worlds'),
+    playerId,
+    lastFeedPostAt: v.optional(v.number()),
+    lastDmAt: v.optional(v.number()),
+  }).index('playerId', ['worldId', 'playerId']),
+
   ...agentTables,
   ...aiTownTables,
   ...engineTables,

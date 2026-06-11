@@ -46,6 +46,11 @@ export default function PlayerDetails({
     playerId ? { worldId, playerId } : 'skip',
   );
 
+  const inbox = useQuery(
+    api.directMessages.listInbox,
+    playerId ? { worldId, playerId } : 'skip',
+  );
+
   const playerDescription = playerId && game.playerDescriptions.get(playerId);
 
   const startConversation = useSendInput(engineId, 'startConversation');
@@ -256,6 +261,29 @@ export default function PlayerDetails({
             humanPlayer={humanPlayer}
             scrollViewRef={scrollViewRef}
           />
+        </>
+      )}
+      {inbox && inbox.length > 0 && (
+        <>
+          <div className="box flex-grow mt-6">
+            <h2 className="bg-brown-700 text-lg text-center">✉️ Direct messages</h2>
+          </div>
+          <div className="mt-2 space-y-2">
+            {inbox.map((m) => {
+              const sent = m.fromPlayerId === playerId;
+              const other = sent
+                ? game.playerDescriptions.get(m.toPlayerId as GameId<'players'>)?.name ?? 'someone'
+                : m.fromName;
+              return (
+                <div key={m._id} className="bg-brown-700 p-2 text-sm">
+                  <div className="text-xs text-brown-300">
+                    {sent ? `→ to ${other}` : `← from ${other}`}
+                  </div>
+                  <div className="whitespace-pre-wrap">{m.text}</div>
+                </div>
+              );
+            })}
+          </div>
         </>
       )}
     </>

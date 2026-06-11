@@ -32,6 +32,11 @@ export const memoryFields = {
       type: v.literal('feedPost'),
       postId: v.id('feedPosts'),
     }),
+    // A direct message the player received (v1.2 Step 4).
+    v.object({
+      type: v.literal('directMessage'),
+      messageId: v.id('directMessages'),
+    }),
   ),
 };
 export const memoryTables = {

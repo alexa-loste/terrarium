@@ -147,6 +147,40 @@ export const deliverFeedPost = internalAction({
   },
 });
 
+export const loadDmDelivery = internalQuery({
+  args: { worldId: v.id('worlds'), messageId: v.id('directMessages') },
+  handler: async (ctx, args) => {
+    const msg = await ctx.db.get(args.messageId);
+    if (!msg) return null;
+    const world = await ctx.db.get(args.worldId);
+    if (!world) return null;
+    // Only deliver to memory if the recipient is an agent (skip human players).
+    const agent = world.agents.find((a) => a.playerId === msg.toPlayerId);
+    if (!agent) return null;
+    return { agentId: agent.id, toPlayerId: msg.toPlayerId, fromName: msg.fromName, text: msg.text };
+  },
+});
+
+export const deliverDirectMessage = internalAction({
+  args: { worldId: v.id('worlds'), messageId: v.id('directMessages') },
+  handler: async (ctx, args) => {
+    const d = await ctx.runQuery(selfInternal.loadDmDelivery, args);
+    if (!d) return;
+    const description = `${d.fromName} sent me a direct message: "${d.text}"`;
+    const importance = await calculateImportance(description);
+    const { embedding } = await fetchEmbedding(description);
+    await ctx.runMutation(selfInternal.insertMemory, {
+      agentId: d.agentId as GameId<'agents'>,
+      playerId: d.toPlayerId as GameId<'players'>,
+      description,
+      importance,
+      lastAccess: Date.now(),
+      data: { type: 'directMessage', messageId: args.messageId },
+      embedding,
+    });
+  },
+});
+
 export const loadConversation = internalQuery({
   args: {
     worldId: v.id('worlds'),
