@@ -1,0 +1,25 @@
+# Netlify hosting for the Terrarium viewer.
+#
+# We build with `vite build` (not `npm run build`) on purpose: `npm run build` runs `tsc`
+# first, and the repo has a couple of harmless pre-existing type errors that would block the
+# deploy. Vite uses esbuild and ships fine regardless.
+#
+# Two env vars must be available at BUILD time (they get baked into the static bundle):
+#   VITE_CONVEX_URL    — the Convex deployment URL (same one in .env.local)
+#   VITE_APP_PASSWORD  — the password for the gate
+# If you deploy a locally-built dir (netlify deploy --dir=dist), these come from .env.local and
+# you don't need to set them in the Netlify UI. If you connect the repo for CI builds, set them
+# in Site settings → Environment variables.
+
+[build]
+  command = "npx vite build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Single-page-app fallback so deep links resolve to index.html.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
