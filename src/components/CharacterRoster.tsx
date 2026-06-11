@@ -22,13 +22,16 @@ function barColor(value: number): string {
   return 'bg-red-400';
 }
 
-function Bar({ value, color }: { value: number; color: string }) {
+function Bar({ icon, value, color, label }: { icon: string; value: number; color: string; label: string }) {
   return (
-    <div className="h-1 w-10 overflow-hidden rounded-full bg-black/50">
-      <div
-        className={`h-full rounded-full ${color}`}
-        style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
-      />
+    <div className="flex items-center gap-0.5" title={`${label} ${Math.round(value)}%`}>
+      <span className="w-2.5 text-center text-[8px] leading-none">{icon}</span>
+      <div className="h-1 w-9 overflow-hidden rounded-full bg-black/50">
+        <div
+          className={`h-full rounded-full ${color}`}
+          style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+        />
+      </div>
     </div>
   );
 }
@@ -94,14 +97,10 @@ export default function CharacterRoster({
             </div>
             <span className="font-body text-[10px] leading-none text-white">{p.name}</span>
             {typeof p.energy === 'number' && (
-              <div title={`Energy ${Math.round(p.energy)}%`}>
-                <Bar value={p.energy} color={barColor(p.energy)} />
-              </div>
+              <Bar icon="⚡" label="Energy" value={p.energy} color={barColor(p.energy)} />
             )}
             {typeof p.food === 'number' && (
-              <div title={`Food ${Math.round(p.food)}%`}>
-                <Bar value={p.food} color={barColor(p.food)} />
-              </div>
+              <Bar icon="🍔" label="Food" value={p.food} color={barColor(p.food)} />
             )}
             {typeof p.money === 'number' && (
               <span className="font-body text-[9px] leading-none text-emerald-300" title="Money">
