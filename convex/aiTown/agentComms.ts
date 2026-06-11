@@ -50,6 +50,7 @@ export const commsContext = internalQuery({
       lastDmAt: state?.lastDmAt ?? 0,
       lastThoughtAt: state?.lastThoughtAt ?? 0,
       lastArtifactAt: state?.lastArtifactAt ?? 0,
+      lastJournalAt: state?.lastJournalAt ?? 0,
     };
   },
 });
@@ -58,7 +59,13 @@ async function upsertState(
   ctx: any,
   worldId: string,
   pid: string,
-  patch: { lastFeedPostAt?: number; lastDmAt?: number; lastThoughtAt?: number; lastArtifactAt?: number },
+  patch: {
+    lastFeedPostAt?: number;
+    lastDmAt?: number;
+    lastThoughtAt?: number;
+    lastArtifactAt?: number;
+    lastJournalAt?: number;
+  },
 ) {
   const existing = await ctx.db
     .query('agentCommsState')
@@ -86,6 +93,11 @@ export const recordThought = internalMutation({
 export const recordArtifact = internalMutation({
   args: { worldId: v.id('worlds'), playerId, at: v.number() },
   handler: (ctx, args) => upsertState(ctx, args.worldId, args.playerId, { lastArtifactAt: args.at }),
+});
+
+export const recordJournal = internalMutation({
+  args: { worldId: v.id('worlds'), playerId, at: v.number() },
+  handler: (ctx, args) => upsertState(ctx, args.worldId, args.playerId, { lastJournalAt: args.at }),
 });
 
 function cleanLine(s: string): string {
@@ -214,4 +226,48 @@ export async function composeArtifact(args: {
     (r) => body.includes(r.authorName) && r.authorName !== args.name,
   )?.title;
   return { title, body, respondsTo };
+}
+
+// v1.7 — a private journal entry. First-person, unguarded, the place they're honest with
+// themselves. The framing depends on what prompted it (nightly wind-down, a conversation, a
+// piece they made, an event, or just something on their mind).
+export type JournalTrigger = 'reflection' | 'conversation' | 'artifact' | 'event' | 'spontaneous';
+
+function journalFraming(trigger: JournalTrigger, context?: string): string {
+  switch (trigger) {
+    case 'reflection':
+      return `It's the end of the day and you're winding down before sleep. Look back on the day — what happened, how you feel about it, what's unresolved.`;
+    case 'conversation':
+      return `You just finished talking with ${context ?? 'someone'}. Write honestly about how it went and how it left you feeling.`;
+    case 'artifact':
+      return `You just finished a piece of work${context ? ` — "${context}"` : ''}. Write about the work: whether it's any good, what it cost you, what it's for.`;
+    case 'event':
+      return `Something happened today that you can't stop thinking about: ${context ?? 'a piece of news'}. Write about what it means for you.`;
+    case 'spontaneous':
+      return `Something's been sitting with you. Open your journal and write it down — whatever it actually is.`;
+  }
+}
+
+export async function composeJournalEntry(args: {
+  name: string;
+  identity: string;
+  plan: string;
+  memories: string[];
+  trigger: JournalTrigger;
+  context?: string;
+  timeContext?: string;
+}): Promise<string> {
+  const prompt =
+    `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    (args.timeContext ? `${args.timeContext}\n` : '') +
+    `${journalFraming(args.trigger, args.context)}\n` +
+    `Write a private journal entry — first person, honest and specific, 2-4 sentences, in your ` +
+    `own voice. This is for no one but you. No salutation, no signature, no quotation marks. ` +
+    `Output only the entry.\nEntry:`;
+  const { content } = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 220,
+    stop: ['\n\n'],
+  });
+  return content.replace(/^["'\s]+|["'\s]+$/g, '').slice(0, 700);
 }

@@ -53,7 +53,33 @@ export default defineSchema({
     lastDmAt: v.optional(v.number()),
     lastThoughtAt: v.optional(v.number()),
     lastArtifactAt: v.optional(v.number()),
+    lastJournalAt: v.optional(v.number()),
   }).index('playerId', ['worldId', 'playerId']),
+
+  // Per-character journal (v1.7): a private, persistent first-person diary. The nightly
+  // consolidation logs a reflection entry here, and characters also write voluntarily after a
+  // significant conversation, after making something, when a notable event lands, or just when
+  // something's on their mind. Each entry is ALSO inserted into the vector memory store (so it
+  // feeds future recall + reflection) — the journal is a readable surface, not a separate brain.
+  // See convex/agent/journal.ts + convex/journal.ts.
+  journalEntries: defineTable({
+    worldId: v.id('worlds'),
+    playerId,
+    playerName: v.string(),
+    // What prompted the entry.
+    trigger: v.union(
+      v.literal('reflection'), // nightly consolidation
+      v.literal('conversation'),
+      v.literal('artifact'),
+      v.literal('event'),
+      v.literal('spontaneous'),
+    ),
+    // A short label for what it's about (the other person, the artifact title, the event).
+    contextNote: v.optional(v.string()),
+    text: v.string(),
+    day: v.number(),
+    createdAt: v.number(),
+  }).index('author', ['worldId', 'playerId']),
 
   // Real work output (v1.6): when an agent works their job they sometimes produce a genuine,
   // role-specific artifact — a research note, policy memo, article, artwork, case note, etc.

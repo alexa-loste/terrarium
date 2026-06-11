@@ -13,6 +13,7 @@ import { asyncMap } from '../util/asyncMap';
 import { GameId, agentId, conversationId, playerId } from '../aiTown/ids';
 import { SerializedPlayer } from '../aiTown/player';
 import { memoryFields } from './schema';
+import { writeJournalEntry } from './journal';
 
 // How long to wait before updating a memory's last access time.
 export const MEMORY_ACCESS_THROTTLE = 300_000; // In ms
@@ -113,6 +114,11 @@ export async function rememberConversation(
       bName: otherPlayer.name,
       ...effect,
     });
+  }
+  // After a conversation that mattered, each side sometimes writes a private journal entry
+  // about how it landed (v1.7). Both participants run this, so each journals their own side.
+  if (importance >= 6 && Math.random() < 0.35) {
+    await writeJournalEntry(ctx, worldId, agentId, playerId, 'conversation', otherPlayer.name);
   }
   return description;
 }

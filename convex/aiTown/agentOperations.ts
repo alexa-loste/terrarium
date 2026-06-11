@@ -16,6 +16,7 @@ import { composeFeedPost, composeDirectMessage, composeThought, composeArtifact 
 import { workOutputFor } from '../../data/artifacts';
 import { fetchEmbedding } from '../util/llm';
 import { rememberConversation, reflectOnMemories } from '../agent/memory';
+import { writeJournalEntry } from '../agent/journal';
 import { MAX_ENERGY, START_SOCIAL } from '../agentVitals';
 import { GameId, agentId, conversationId, playerId } from './ids';
 import {
@@ -158,6 +159,10 @@ export const agentDoSomething = internalAction({
       }
       // Otherwise, maybe just have a passing thought (their stream of consciousness, v1.3).
       if (await maybeThink(ctx, args, now, time)) {
+        return;
+      }
+      // Or, now and then, sit down and write in their journal unprompted (v1.7).
+      if (await maybeJournal(ctx, args, now, time)) {
         return;
       }
       if (recentActivity || justLeftConversation) {
@@ -333,6 +338,8 @@ async function tickVitals(
     if (!asleep) {
       if (lastDay !== time.day) {
         await reflectOnMemories(ctx, args.worldId, args.player.id);
+        // The day's consolidation gets written up as a journal entry (v1.7).
+        await writeJournalEntry(ctx, args.worldId, args.agent.id, args.player.id, 'reflection');
         await set({ energy: MAX_ENERGY, asleep: true, lastConsolidatedDay: time.day });
       } else {
         await set({ asleep: true });
@@ -627,7 +634,39 @@ async function maybeMakeArtifact(
     playerName: cc.name,
     emoji: output.emoji,
   });
+  // Sometimes they journal about the work they just made (v1.7).
+  if (Math.random() < 0.4) {
+    await writeJournalEntry(ctx, args.worldId, args.agent.id, args.player.id, 'artifact', piece.title);
+  }
   await finishWithActivity(ctx, args, output.activity, output.emoji, now, 60_000);
+  return true;
+}
+
+// Now and then, unprompted, a character sits down and writes in their journal (v1.7). Rare +
+// cooldown-gated (the cooldown is shared across all journal triggers, so they won't journal
+// right after a nightly/conversation/artifact entry). Daytime only — nights are for sleep +
+// the consolidation entry. Returns true if they wrote one.
+const JOURNAL_COOLDOWN = 6 * 60_000;
+const JOURNAL_CHANCE = 0.05;
+
+async function maybeJournal(ctx: any, args: any, now: number, time: WorldTime): Promise<boolean> {
+  if (time.phase === 'night') return false;
+  if (Math.random() >= JOURNAL_CHANCE) return false;
+  const cc = await ctx.runQuery(internal.aiTown.agentComms.commsContext, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+  });
+  if (!cc) return false;
+  if (now - cc.lastJournalAt < JOURNAL_COOLDOWN) return false;
+  const ok = await writeJournalEntry(
+    ctx,
+    args.worldId,
+    args.agent.id,
+    args.player.id,
+    'spontaneous',
+  );
+  if (!ok) return false;
+  await finishWithActivity(ctx, args, 'writing in their journal', '📔', now, 30_000);
   return true;
 }
 

@@ -61,6 +61,11 @@ export default function PlayerDetails({
     playerId ? { worldId, authorPlayerId: playerId } : 'skip',
   );
 
+  const journal = useQuery(
+    api.journal.listByAuthor,
+    playerId ? { worldId, playerId } : 'skip',
+  );
+
   const reputation = useQuery(api.relationships.listReputation, { worldId });
   const rankedReputation = reputation ? [...reputation].sort((a, b) => b.prestige - a.prestige) : [];
   const myPrestige = playerId ? reputation?.find((r) => r.playerId === playerId)?.prestige : undefined;
@@ -341,6 +346,43 @@ export default function PlayerDetails({
                 )}
               </div>
             ))}
+          </div>
+        </>
+      )}
+      {journal && journal.length > 0 && (
+        <>
+          <div className="box flex-grow mt-4">
+            <h2 className="bg-brown-700 text-lg text-center">
+              📔 Journal <span className="text-brown-300 text-sm">({journal.length})</span>
+            </h2>
+          </div>
+          <div className="mt-2 space-y-1">
+            {journal.slice(0, 12).map((e) => {
+              const tag: Record<string, string> = {
+                reflection: '🌙 nightly',
+                conversation: '💬 after talking',
+                artifact: '🛠️ on the work',
+                event: '📣 on the news',
+                spontaneous: '✍️ unprompted',
+              };
+              return (
+                <div
+                  key={e._id}
+                  className="border-l-4 border-l-sky-400 bg-brown-700 px-2 py-1 text-sm"
+                >
+                  <div className="flex items-baseline gap-1.5 text-[10px] text-brown-300">
+                    <span>{tag[e.trigger] ?? e.trigger}</span>
+                    {e.contextNote && e.trigger !== 'reflection' && (
+                      <span className="italic">· {e.contextNote}</span>
+                    )}
+                    <span className="ml-auto">day {e.day}</span>
+                  </div>
+                  <p className="mt-0.5 whitespace-pre-wrap italic leading-snug text-brown-100">
+                    {e.text}
+                  </p>
+                </div>
+              );
+            })}
           </div>
         </>
       )}
