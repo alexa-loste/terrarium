@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
@@ -10,6 +11,44 @@ import { Player } from '../../convex/aiTown/player';
 import { GameId } from '../../convex/aiTown/ids';
 import { ServerGame } from '../hooks/serverGame';
 import { jobLabel } from '../../data/work';
+
+// A collapsible panel section: the brown header bar is a toggle (collapsed by default), with
+// an optional count badge so you can see what's inside without opening it.
+function Section({
+  title,
+  badge,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  badge?: number;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mt-3">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="pointer-events-auto w-full cursor-pointer"
+        title={open ? 'Click to collapse' : 'Click to expand'}
+      >
+        <div className="flex items-center gap-2 bg-brown-700 px-3 py-1.5 text-lg shadow-solid">
+          <span
+            className={`text-sm text-brown-300 transition-transform ${open ? 'rotate-90' : ''}`}
+          >
+            ▶
+          </span>
+          <span className="flex-1 text-left">{title}</span>
+          {typeof badge === 'number' && badge > 0 && (
+            <span className="rounded-full bg-black/30 px-2 text-xs text-brown-200">{badge}</span>
+          )}
+        </div>
+      </button>
+      {open && <div className="mt-2">{children}</div>}
+    </div>
+  );
+}
 
 export default function PlayerDetails({
   worldId,
@@ -326,11 +365,8 @@ export default function PlayerDetails({
         </div>
       )}
       {beliefs && beliefs.length > 0 && (
-        <>
-          <div className="box flex-grow mt-4">
-            <h2 className="bg-brown-700 text-lg text-center">🧭 Beliefs</h2>
-          </div>
-          <div className="mt-2 space-y-1.5">
+        <Section title="🧭 Beliefs" badge={beliefs.length}>
+          <div className="space-y-1.5">
             {beliefs.map((b) => {
               const recentlyShifted =
                 !!b.lastShiftAt && Date.now() - b.lastShiftAt < 15 * 60 * 1000;
@@ -360,14 +396,11 @@ export default function PlayerDetails({
               );
             })}
           </div>
-        </>
+        </Section>
       )}
       {relationships && relationships.length > 0 && (
-        <>
-          <div className="box flex-grow mt-4">
-            <h2 className="bg-brown-700 text-lg text-center">🫶 Relationships</h2>
-          </div>
-          <div className="mt-2 space-y-1">
+        <Section title="🫶 Relationships" badge={relationships.length}>
+          <div className="space-y-1">
             {relationships.slice(0, 6).map((r) => {
               const name =
                 game.playerDescriptions.get(r.toPlayerId as GameId<'players'>)?.name ?? 'someone';
@@ -386,16 +419,11 @@ export default function PlayerDetails({
               );
             })}
           </div>
-        </>
+        </Section>
       )}
       {works && works.length > 0 && (
-        <>
-          <div className="box flex-grow mt-4">
-            <h2 className="bg-brown-700 text-lg text-center">
-              📚 Works <span className="text-brown-300 text-sm">({works.length})</span>
-            </h2>
-          </div>
-          <div className="mt-2 space-y-1">
+        <Section title="📚 Works" badge={works.length}>
+          <div className="space-y-1">
             {works.slice(0, 8).map((w) => (
               <div key={w._id} className="bg-brown-700 px-2 py-1 text-sm">
                 <div className="flex items-baseline gap-1.5">
@@ -413,16 +441,11 @@ export default function PlayerDetails({
               </div>
             ))}
           </div>
-        </>
+        </Section>
       )}
       {journal && journal.length > 0 && (
-        <>
-          <div className="box flex-grow mt-4">
-            <h2 className="bg-brown-700 text-lg text-center">
-              📔 Journal <span className="text-brown-300 text-sm">({journal.length})</span>
-            </h2>
-          </div>
-          <div className="mt-2 space-y-1">
+        <Section title="📔 Journal" badge={journal.length}>
+          <div className="space-y-1">
             {journal.slice(0, 12).map((e) => {
               const tag: Record<string, string> = {
                 reflection: '🌙 nightly',
@@ -450,14 +473,11 @@ export default function PlayerDetails({
               );
             })}
           </div>
-        </>
+        </Section>
       )}
       {inbox && inbox.length > 0 && (
-        <>
-          <div className="box flex-grow mt-6">
-            <h2 className="bg-brown-700 text-lg text-center">✉️ Direct messages</h2>
-          </div>
-          <div className="mt-2 space-y-2">
+        <Section title="✉️ Direct messages" badge={inbox.length}>
+          <div className="space-y-2">
             {inbox.map((m) => {
               const sent = m.fromPlayerId === playerId;
               const other = sent
@@ -473,7 +493,7 @@ export default function PlayerDetails({
               );
             })}
           </div>
-        </>
+        </Section>
       )}
     </>
   );
