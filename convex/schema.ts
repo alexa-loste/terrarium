@@ -54,7 +54,24 @@ export default defineSchema({
     lastThoughtAt: v.optional(v.number()),
     lastArtifactAt: v.optional(v.number()),
     lastJournalAt: v.optional(v.number()),
+    lastReactAt: v.optional(v.number()),
   }).index('playerId', ['worldId', 'playerId']),
+
+  // Beliefs (v1.8): each character's convictions, seeded from their profile (data/beliefs.ts)
+  // and evolving over time. They color the work a character makes and how they argue, and they
+  // shift — slowly each night, and sharply when a controversial piece or a heated disagreement
+  // lands. `conviction` is 0..100; `lastShiftAt` marks a recent change for the UI.
+  beliefs: defineTable({
+    worldId: v.id('worlds'),
+    playerId,
+    playerName: v.string(),
+    topic: v.string(),
+    statement: v.string(),
+    conviction: v.number(),
+    origin: v.union(v.literal('seed'), v.literal('evolved')),
+    updatedAt: v.number(),
+    lastShiftAt: v.optional(v.number()),
+  }).index('author', ['worldId', 'playerId']),
 
   // Per-character journal (v1.7): a private, persistent first-person diary. The nightly
   // consolidation logs a reflection entry here, and characters also write voluntarily after a

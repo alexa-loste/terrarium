@@ -115,6 +115,69 @@ export const applyConversationOutcome = internalMutation({
   },
 });
 
+// v1.8 — nudge a single directed edge (from -> to) without the full two-way conversation
+// machinery. Used when someone reacts to another's work: it changes how the READER feels about
+// the AUTHOR (warmth/respect), with only a small familiarity bump. Logs a threshold crossing.
+export const nudgeDirected = internalMutation({
+  args: {
+    worldId: v.id('worlds'),
+    fromPlayerId: playerId,
+    fromName: v.string(),
+    toPlayerId: playerId,
+    toName: v.string(),
+    warmth: v.number(), // -3..3
+    respect: v.number(), // -3..3
+  },
+  handler: async (ctx, args) => {
+    if (!args.warmth && !args.respect) return;
+    const now = Date.now();
+    const existing = await ctx.db
+      .query('relationships')
+      .withIndex('edge', (q: any) =>
+        q
+          .eq('worldId', args.worldId)
+          .eq('fromPlayerId', args.fromPlayerId)
+          .eq('toPlayerId', args.toPlayerId),
+      )
+      .first();
+    const cur = existing ?? baseEdge();
+    const affinityBefore = cur.affinity;
+    const next = {
+      familiarity: clamp(cur.familiarity + 2),
+      affinity: clamp(cur.affinity + args.warmth * DELTA_SCALE),
+      respect: clamp(cur.respect + args.respect * DELTA_SCALE),
+      trust: cur.trust,
+      romantic: cur.romantic,
+      updatedAt: now,
+    };
+    if (existing) await ctx.db.patch(existing._id, next);
+    else
+      await ctx.db.insert('relationships', {
+        worldId: args.worldId,
+        fromPlayerId: args.fromPlayerId,
+        toPlayerId: args.toPlayerId,
+        ...next,
+      });
+    let summary: string | null = null;
+    if (affinityBefore < CLOSE_THRESHOLD && next.affinity >= CLOSE_THRESHOLD) {
+      summary = `${args.fromName} warmed to ${args.toName} over their work.`;
+    } else if (affinityBefore >= DISTANT_THRESHOLD && next.affinity < DISTANT_THRESHOLD) {
+      summary = `${args.fromName} cooled on ${args.toName} over their work.`;
+    }
+    if (summary) {
+      await ctx.db.insert('townEvents', {
+        worldId: args.worldId,
+        ts: now,
+        kind: 'relationship',
+        playerName: args.fromName,
+        subjectName: args.toName,
+        emoji: '💞',
+        summary,
+      });
+    }
+  },
+});
+
 // A player's outgoing relationships (how they feel about everyone), strongest first.
 export const getRelationships = query({
   args: { worldId: v.id('worlds'), playerId },

@@ -12,7 +12,14 @@ import {
   MEAL_FOOD,
   STARTING_MONEY,
 } from '../../data/economy';
-import { composeFeedPost, composeDirectMessage, composeThought, composeArtifact } from './agentComms';
+import {
+  composeFeedPost,
+  composeDirectMessage,
+  composeThought,
+  composeArtifact,
+  composeReaction,
+  assessBeliefDrift,
+} from './agentComms';
 import { workOutputFor } from '../../data/artifacts';
 import { fetchEmbedding } from '../util/llm';
 import { rememberConversation, reflectOnMemories } from '../agent/memory';
@@ -163,6 +170,11 @@ export const agentDoSomething = internalAction({
       }
       // Or, now and then, sit down and write in their journal unprompted (v1.7).
       if (await maybeJournal(ctx, args, now, time)) {
+        return;
+      }
+      // Or read a recent piece of someone else's work and react to it through their own
+      // convictions — which can shift those convictions + how they feel about the author (v1.8).
+      if (await maybeReactToWork(ctx, args, now, time)) {
         return;
       }
       if (recentActivity || justLeftConversation) {
@@ -340,6 +352,8 @@ async function tickVitals(
         await reflectOnMemories(ctx, args.worldId, args.player.id);
         // The day's consolidation gets written up as a journal entry (v1.7).
         await writeJournalEntry(ctx, args.worldId, args.agent.id, args.player.id, 'reflection');
+        // ...and the day may have nudged their convictions (v1.8 nightly belief drift).
+        await driftBeliefs(ctx, args);
         await set({ energy: MAX_ENERGY, asleep: true, lastConsolidatedDay: time.day });
       } else {
         await set({ asleep: true });
@@ -580,6 +594,10 @@ async function maybeMakeArtifact(
     worldId: args.worldId,
     limit: 5,
   });
+  const beliefs = await ctx.runQuery(internal.beliefs.forContext, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+  });
 
   const piece = await composeArtifact({
     name: cc.name,
@@ -589,6 +607,7 @@ async function maybeMakeArtifact(
     workType: output.workType,
     memories: cc.memories,
     recent,
+    beliefs,
     placeName: place?.name,
     timeContext: timeOfDayPrompt(time),
   });
@@ -667,6 +686,126 @@ async function maybeJournal(ctx: any, args: any, now: number, time: WorldTime): 
   );
   if (!ok) return false;
   await finishWithActivity(ctx, args, 'writing in their journal', '📔', now, 30_000);
+  return true;
+}
+
+// The overnight belief drift (v1.8): looking back on the day, nudge convictions that moved.
+// One cheap LLM call during consolidation; best-effort.
+async function driftBeliefs(ctx: any, args: any): Promise<void> {
+  try {
+    const beliefs = await ctx.runQuery(internal.beliefs.forContext, {
+      worldId: args.worldId,
+      playerId: args.player.id,
+    });
+    if (!beliefs.length) return;
+    const cc = await ctx.runQuery(internal.aiTown.agentComms.commsContext, {
+      worldId: args.worldId,
+      playerId: args.player.id,
+    });
+    if (!cc) return;
+    const drifts = await assessBeliefDrift({ name: cc.name, beliefs, dayMemories: cc.memories });
+    if (drifts.length) {
+      await ctx.runMutation(internal.beliefs.applyDrift, {
+        worldId: args.worldId,
+        playerId: args.player.id,
+        drifts,
+      });
+    }
+  } catch (e) {
+    console.error('driftBeliefs failed', e);
+  }
+}
+
+// Read a recent piece of someone else's work and react to it through your own convictions
+// (v1.8). A piece that conflicts with a strong belief lands hard; one you agree with warms you
+// to its author. The reaction can shift the reader's conviction and how they feel about the
+// author — and becomes a visible memory + Chronicle line. Daytime, rate-limited. This is the
+// reactive half of belief change (the nightly drift is the slow half).
+const REACT_COOLDOWN = 5 * 60_000;
+const REACT_CHANCE = 0.12;
+const REACT_IMPORTANCE = 5;
+
+async function maybeReactToWork(ctx: any, args: any, now: number, time: WorldTime): Promise<boolean> {
+  if (time.phase === 'night') return false;
+  if (Math.random() >= REACT_CHANCE) return false;
+  const all = await ctx.runQuery(api.artifacts.listArtifacts, { worldId: args.worldId, limit: 12 });
+  const others = (all ?? []).filter((a: any) => a.authorPlayerId !== args.player.id);
+  if (!others.length) return false;
+  const cc = await ctx.runQuery(internal.aiTown.agentComms.commsContext, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+  });
+  if (!cc) return false;
+  if (now - cc.lastReactAt < REACT_COOLDOWN) return false;
+  const beliefs = await ctx.runQuery(internal.beliefs.forContext, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+  });
+  if (!beliefs.length) return false;
+
+  const piece = others[Math.floor(Math.random() * others.length)];
+  const r = await composeReaction({
+    name: cc.name,
+    identity: cc.identity,
+    beliefs,
+    piece: {
+      authorName: piece.authorName,
+      workType: piece.workType,
+      title: piece.title,
+      body: piece.body,
+    },
+    timeContext: timeOfDayPrompt(time),
+  });
+  if (!r) return false;
+
+  // Shift the reader's conviction on the belief it touched.
+  if (r.convictionDelta && r.topic && r.topic.toLowerCase() !== 'none') {
+    await ctx.runMutation(internal.beliefs.nudgeBelief, {
+      worldId: args.worldId,
+      playerId: args.player.id,
+      topic: r.topic,
+      delta: r.convictionDelta,
+    });
+  }
+  // Change how they feel about the author.
+  if (r.affinityDelta || r.respectDelta) {
+    await ctx.runMutation(internal.relationships.nudgeDirected, {
+      worldId: args.worldId,
+      fromPlayerId: args.player.id,
+      fromName: cc.name,
+      toPlayerId: piece.authorPlayerId,
+      toName: piece.authorName,
+      warmth: r.affinityDelta,
+      respect: r.respectDelta,
+    });
+  }
+  // A memory of having read + reacted (feeds recall + reflection).
+  const memText = `I read ${piece.authorName}'s ${piece.workType} "${piece.title}" and reacted: ${r.reaction}`;
+  const { embedding } = await fetchEmbedding(memText);
+  await ctx.runMutation(internal.agent.memory.insertMemory, {
+    agentId: args.agent.id,
+    playerId: args.player.id,
+    description: memText,
+    importance: REACT_IMPORTANCE,
+    lastAccess: now,
+    data: { type: 'thought' },
+    embedding,
+  });
+  await ctx.runMutation(internal.aiTown.agentComms.recordReact, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+    at: now,
+  });
+  await ctx.runMutation(internal.townLog.recordEvent, {
+    worldId: args.worldId,
+    kind: 'thought',
+    summary: `On ${piece.authorName}'s "${piece.title}": ${r.reaction}`,
+    playerId: args.player.id,
+    playerName: cc.name,
+    subjectName: piece.authorName,
+    emoji: '👀',
+  });
+  await finishWithActivity(ctx, args, `reading ${piece.authorName}'s ${piece.workType}`, '👀', now, 30_000);
   return true;
 }
 

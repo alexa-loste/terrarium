@@ -51,6 +51,7 @@ export const commsContext = internalQuery({
       lastThoughtAt: state?.lastThoughtAt ?? 0,
       lastArtifactAt: state?.lastArtifactAt ?? 0,
       lastJournalAt: state?.lastJournalAt ?? 0,
+      lastReactAt: state?.lastReactAt ?? 0,
     };
   },
 });
@@ -65,6 +66,7 @@ async function upsertState(
     lastThoughtAt?: number;
     lastArtifactAt?: number;
     lastJournalAt?: number;
+    lastReactAt?: number;
   },
 ) {
   const existing = await ctx.db
@@ -100,12 +102,29 @@ export const recordJournal = internalMutation({
   handler: (ctx, args) => upsertState(ctx, args.worldId, args.playerId, { lastJournalAt: args.at }),
 });
 
+export const recordReact = internalMutation({
+  args: { worldId: v.id('worlds'), playerId, at: v.number() },
+  handler: (ctx, args) => upsertState(ctx, args.worldId, args.playerId, { lastReactAt: args.at }),
+});
+
 function cleanLine(s: string): string {
   return s.replace(/^["'\s]+|["'\s]+$/g, '').slice(0, 280);
 }
 
 const memBlock = (memories: string[]) =>
   memories.length ? `Recently on your mind:\n- ${memories.join('\n- ')}\n` : '';
+
+// v1.8 — the convictions a character writes/argues/reacts from. Belief = {topic, statement,
+// conviction 0..100}. Strong ones lead; weak ones are flagged as held loosely.
+export type Belief = { topic: string; statement: string; conviction: number };
+const beliefBlock = (beliefs?: Belief[]) =>
+  beliefs && beliefs.length
+    ? `What you believe (write and argue from these; they are yours):\n` +
+      beliefs
+        .map((b) => `- ${b.statement}${b.conviction < 45 ? ' (though you hold this loosely)' : ''}`)
+        .join('\n') +
+      '\n'
+    : '';
 
 export async function composeFeedPost(args: {
   name: string;
@@ -190,6 +209,7 @@ export async function composeArtifact(args: {
   workType: string;
   memories: string[];
   recent: { authorName: string; workType: string; title: string }[];
+  beliefs?: Belief[];
   placeName?: string;
   timeContext?: string;
 }): Promise<{ title: string; body: string; respondsTo?: string } | null> {
@@ -200,6 +220,7 @@ export async function composeArtifact(args: {
     : '';
   const prompt =
     `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    beliefBlock(args.beliefs) +
     (args.placeName ? `You're working at ${args.placeName}.\n` : '') +
     (args.timeContext ? `${args.timeContext}\n` : '') +
     recentBlock +
@@ -270,4 +291,95 @@ export async function composeJournalEntry(args: {
     stop: ['\n\n'],
   });
   return content.replace(/^["'\s]+|["'\s]+$/g, '').slice(0, 700);
+}
+
+const clampInt = (n: number, lo: number, hi: number) =>
+  Math.max(lo, Math.min(hi, Math.round(n)));
+const firstInt = (s?: string): number | null => {
+  const m = s?.match(/-?\d+/);
+  return m ? parseInt(m[0], 10) : null;
+};
+
+// v1.8 — react to someone else's work, through the lens of your convictions. Returns the felt
+// reaction plus how it moved you: which of YOUR belief topics it touched, whether it reinforced
+// (+) or shook (–) that conviction, and how it changed what you think of the author. A piece
+// that conflicts with a strong belief produces a strong reaction; one you agree with warms you
+// to them. Parsed leniently; null only if the model gives nothing usable.
+export async function composeReaction(args: {
+  name: string;
+  identity: string;
+  beliefs: Belief[];
+  piece: { authorName: string; workType: string; title: string; body: string };
+  timeContext?: string;
+}): Promise<{
+  reaction: string;
+  topic: string;
+  convictionDelta: number;
+  affinityDelta: number;
+  respectDelta: number;
+} | null> {
+  const prompt =
+    `You are ${args.name}. ${args.identity}\n` +
+    beliefBlock(args.beliefs) +
+    (args.timeContext ? `${args.timeContext}\n` : '') +
+    `You just read ${args.piece.authorName}'s ${args.piece.workType}, "${args.piece.title}":\n` +
+    `"${args.piece.body}"\n\n` +
+    `React honestly, through your own convictions. Then report how it moved you.\n` +
+    `Format EXACTLY as:\n` +
+    `REACTION: <1-2 sentences, first person — what you think of it>\n` +
+    `TOPIC: <which of your beliefs it touches, or none>\n` +
+    `CONVICTION: <integer -8..8: negative if it shook your conviction, positive if it hardened it>\n` +
+    `AFFINITY: <integer -3..3: how it changed your warmth toward ${args.piece.authorName}>\n` +
+    `RESPECT: <integer -3..3: how it changed your respect for ${args.piece.authorName}>`;
+  const { content } = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 220,
+  });
+  const reactionMatch = content.match(/REACTION:\s*([\s\S]*?)(?:\nTOPIC:|\nCONVICTION:|$)/i);
+  const reaction = (reactionMatch?.[1] ?? '').trim().replace(/^["']|["']$/g, '').slice(0, 300);
+  if (!reaction) return null;
+  const topic = (content.match(/TOPIC:\s*(.+?)(?:\n|$)/i)?.[1] ?? 'none')
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .slice(0, 40);
+  return {
+    reaction,
+    topic,
+    convictionDelta: clampInt(firstInt(content.match(/CONVICTION:\s*(-?\d+)/i)?.[1]) ?? 0, -8, 8),
+    affinityDelta: clampInt(firstInt(content.match(/AFFINITY:\s*(-?\d+)/i)?.[1]) ?? 0, -3, 3),
+    respectDelta: clampInt(firstInt(content.match(/RESPECT:\s*(-?\d+)/i)?.[1]) ?? 0, -3, 3),
+  };
+}
+
+// v1.8 — the overnight belief drift. Looking back on the day's experiences, which convictions
+// (if any) moved, and by how much (small: -5..5). Returns a list of {topic, delta}; empty if
+// the day didn't change anyone's mind. One cheap call during consolidation.
+export async function assessBeliefDrift(args: {
+  name: string;
+  beliefs: Belief[];
+  dayMemories: string[];
+}): Promise<{ topic: string; delta: number }[]> {
+  if (!args.beliefs.length) return [];
+  const prompt =
+    `You are ${args.name}.\n` +
+    `Your current convictions:\n` +
+    args.beliefs.map((b) => `- [${b.topic}] ${b.statement} (strength ${b.conviction})`).join('\n') +
+    `\n\nLooking back on your day:\n- ${(args.dayMemories.length ? args.dayMemories : ['(an ordinary day)']).join('\n- ')}\n\n` +
+    `Did anything today move any of these convictions? For each belief that shifted, output one ` +
+    `line: <topic> | <integer -5..5> (negative = weakened, positive = strengthened). Only include ` +
+    `beliefs that actually moved. If nothing changed, output exactly: none\nChanges:`;
+  const { content } = await chatCompletion({
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 120,
+  });
+  if (/^\s*none\b/i.test(content)) return [];
+  const out: { topic: string; delta: number }[] = [];
+  for (const line of content.split('\n')) {
+    const m = line.match(/^\s*[-*]?\s*(.+?)\s*\|\s*(-?\d+)/);
+    if (m) {
+      const delta = clampInt(parseInt(m[2], 10), -5, 5);
+      if (delta !== 0) out.push({ topic: m[1].trim().slice(0, 40), delta });
+    }
+  }
+  return out.slice(0, 3);
 }

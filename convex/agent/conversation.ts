@@ -44,12 +44,14 @@ export async function startConversationMessage(
     (m) => m.data.type === 'conversation' && m.data.playerIds.includes(otherPlayerId),
   );
   const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, { worldId });
+  const beliefs = await ctx.runQuery(internal.beliefs.forContext, { worldId, playerId });
   const prompt = [
     `You are ${player.name}, and you just started a conversation with ${otherPlayer.name}.`,
     timeOfDayPrompt(time),
   ];
   if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
+  prompt.push(...beliefsPrompt(beliefs));
   prompt.push(...previousConversationPrompt(otherPlayer, lastConversation));
   prompt.push(...relatedMemoriesPrompt(memories));
   prompt.push(...dialogueStyle(player.name, otherPlayer.name));
@@ -107,12 +109,14 @@ export async function continueConversationMessage(
   );
   const memories = await memory.searchMemories(ctx, player.id as GameId<'players'>, embedding, 3);
   const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, { worldId });
+  const beliefs = await ctx.runQuery(internal.beliefs.forContext, { worldId, playerId });
   const prompt = [
     `You are ${player.name}, and you're currently in a conversation with ${otherPlayer.name}.`,
     timeOfDayPrompt(time),
   ];
   if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
+  prompt.push(...beliefsPrompt(beliefs));
   prompt.push(...relatedMemoriesPrompt(memories));
   prompt.push(
     `Below is the current chat history between you and ${otherPlayer.name}.`,
@@ -208,6 +212,17 @@ function agentPrompts(
     prompt.push(`About ${otherPlayer.name}, in their own words: ${otherAgent.identity}`);
   }
   return prompt;
+}
+
+// v1.8 — put the speaker's convictions in front of them so dialogue argues from real positions
+// (and they're not afraid to disagree). Only the strong ones; loosely-held ones stay quiet.
+function beliefsPrompt(beliefs: { statement: string; conviction: number }[] | null): string[] {
+  const strong = (beliefs ?? []).filter((b) => b.conviction >= 45).slice(0, 3);
+  if (!strong.length) return [];
+  return [
+    `What you believe (speak from these; push back honestly if they say something you disagree with):\n- ` +
+      strong.map((b) => b.statement).join('\n- '),
+  ];
 }
 
 // Keep the (small, local) model from writing the other person's lines or stage directions.

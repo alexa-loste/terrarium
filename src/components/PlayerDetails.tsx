@@ -66,6 +66,11 @@ export default function PlayerDetails({
     playerId ? { worldId, playerId } : 'skip',
   );
 
+  const beliefs = useQuery(
+    api.beliefs.getForPlayer,
+    playerId ? { worldId, playerId } : 'skip',
+  );
+
   const reputation = useQuery(api.relationships.listReputation, { worldId });
   const rankedReputation = reputation ? [...reputation].sort((a, b) => b.prestige - a.prestige) : [];
   const myPrestige = playerId ? reputation?.find((r) => r.playerId === playerId)?.prestige : undefined;
@@ -295,6 +300,43 @@ export default function PlayerDetails({
             )}
           </h2>
         </div>
+      )}
+      {beliefs && beliefs.length > 0 && (
+        <>
+          <div className="box flex-grow mt-4">
+            <h2 className="bg-brown-700 text-lg text-center">🧭 Beliefs</h2>
+          </div>
+          <div className="mt-2 space-y-1.5">
+            {beliefs.map((b) => {
+              const recentlyShifted =
+                !!b.lastShiftAt && Date.now() - b.lastShiftAt < 15 * 60 * 1000;
+              const barColor =
+                b.conviction > 66 ? 'bg-rose-400' : b.conviction > 40 ? 'bg-amber-400' : 'bg-sky-400';
+              return (
+                <div key={b._id} className="bg-brown-700 px-2 py-1 text-sm">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-[10px] uppercase tracking-wide text-brown-300">
+                      {b.topic}
+                    </span>
+                    {recentlyShifted && (
+                      <span className="text-[10px] text-yellow-300" title="recently shifted">
+                        ⟳ shifting
+                      </span>
+                    )}
+                    <span className="ml-auto text-[10px] text-brown-300">{Math.round(b.conviction)}</span>
+                  </div>
+                  <div className="my-0.5 h-1 w-full overflow-hidden rounded-full bg-black/40">
+                    <div
+                      className={`h-full rounded-full ${barColor}`}
+                      style={{ width: `${Math.max(0, Math.min(100, b.conviction))}%` }}
+                    />
+                  </div>
+                  <p className="leading-snug text-brown-100">{b.statement}</p>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
       {relationships && relationships.length > 0 && (
         <>
