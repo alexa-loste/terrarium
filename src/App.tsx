@@ -76,7 +76,6 @@ export default function Home() {
         <footer className="pointer-events-none absolute bottom-3 left-3 z-30 flex flex-col items-start gap-2">
           {controlsOpen && (
             <div className="pointer-events-auto flex scale-90 flex-col items-start gap-2">
-              <FreezeButton />
               <MusicButton />
               <InteractButton />
               <Button imgUrl={helpImg} onClick={() => setHelpModalOpen(true)}>
@@ -84,13 +83,16 @@ export default function Home() {
               </Button>
             </div>
           )}
-          <button
-            onClick={() => setControlsOpen((o) => !o)}
-            title={controlsOpen ? 'Hide controls' : 'Show controls'}
-            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border-2 border-brown-900 bg-clay-700 text-xl text-white shadow-solid"
-          >
-            {controlsOpen ? '✕' : '☰'}
-          </button>
+          <div className="pointer-events-auto flex items-center gap-2">
+            <FreezeButton />
+            <button
+              onClick={() => setControlsOpen((o) => !o)}
+              title={controlsOpen ? 'Hide controls' : 'Show controls'}
+              className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-brown-900 bg-clay-700 text-xl text-white shadow-solid"
+            >
+              {controlsOpen ? '✕' : '☰'}
+            </button>
+          </div>
         </footer>
         <ToastContainer position="bottom-right" autoClose={2000} closeOnClick theme="dark" />
       </div>

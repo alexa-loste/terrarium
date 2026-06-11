@@ -7,6 +7,7 @@ import { api, internal } from '../_generated/api';
 import * as embeddingsCache from './embeddingsCache';
 import { GameId, conversationId, playerId } from '../aiTown/ids';
 import { NUM_MEMORIES_TO_SEARCH } from '../constants';
+import { nearestPlace } from '../../data/places';
 
 const selfInternal = internal.agent.conversation;
 
@@ -17,7 +18,7 @@ export async function startConversationMessage(
   playerId: GameId<'players'>,
   otherPlayerId: GameId<'players'>,
 ): Promise<string> {
-  const { player, otherPlayer, agent, otherAgent, lastConversation } = await ctx.runQuery(
+  const { player, otherPlayer, place, agent, otherAgent, lastConversation } = await ctx.runQuery(
     selfInternal.queryPromptData,
     {
       worldId,
@@ -44,9 +45,11 @@ export async function startConversationMessage(
   const prompt = [
     `You are ${player.name}, and you just started a conversation with ${otherPlayer.name}.`,
   ];
+  if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
   prompt.push(...previousConversationPrompt(otherPlayer, lastConversation));
   prompt.push(...relatedMemoriesPrompt(memories));
+  prompt.push(...dialogueStyle(player.name, otherPlayer.name));
   if (memoryWithOtherPlayer) {
     prompt.push(
       `Be sure to include some detail or question about a previous conversation in your greeting.`,
@@ -69,10 +72,14 @@ export async function startConversationMessage(
 }
 
 function trimContentPrefx(content: string, prompt: string) {
-  if (content.startsWith(prompt)) {
-    return content.slice(prompt.length).trim();
+  let c = content;
+  if (c.startsWith(prompt)) {
+    c = c.slice(prompt.length).trim();
   }
-  return content;
+  // Strip leaked meta prefixes the small local model sometimes emits, e.g.
+  // "Naomi's response would be: ..." or "Theo would say: ...".
+  c = c.replace(/^\s*[A-Z][a-z]+(?:'s)?\s+(?:response would be|would say|says|replies?)\s*:?\s*/i, '');
+  return c.trim();
 }
 
 export async function continueConversationMessage(
@@ -82,7 +89,7 @@ export async function continueConversationMessage(
   playerId: GameId<'players'>,
   otherPlayerId: GameId<'players'>,
 ): Promise<string> {
-  const { player, otherPlayer, conversation, agent, otherAgent } = await ctx.runQuery(
+  const { player, otherPlayer, place, conversation, agent, otherAgent } = await ctx.runQuery(
     selfInternal.queryPromptData,
     {
       worldId,
@@ -102,12 +109,14 @@ export async function continueConversationMessage(
     `You are ${player.name}, and you're currently in a conversation with ${otherPlayer.name}.`,
     `The conversation started at ${started.toLocaleString()}. It's now ${now.toLocaleString()}.`,
   ];
+  if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
   prompt.push(...relatedMemoriesPrompt(memories));
   prompt.push(
     `Below is the current chat history between you and ${otherPlayer.name}.`,
     `DO NOT greet them again. Do NOT use the word "Hey" too often. Your response should be brief and within 200 characters.`,
   );
+  prompt.push(...dialogueStyle(player.name, otherPlayer.name));
 
   const llmMessages: LLMMessage[] = [
     {
@@ -158,6 +167,7 @@ export async function leaveConversationMessage(
     `Below is the current chat history between you and ${otherPlayer.name}.`,
     `How would you like to tell them that you're leaving? Your response should be brief and within 200 characters.`,
   );
+  prompt.push(...dialogueStyle(player.name, otherPlayer.name));
   const llmMessages: LLMMessage[] = [
     {
       role: 'system',
@@ -196,6 +206,15 @@ function agentPrompts(
     prompt.push(`About ${otherPlayer.name}, in their own words: ${otherAgent.identity}`);
   }
   return prompt;
+}
+
+// Keep the (small, local) model from writing the other person's lines or stage directions.
+function dialogueStyle(playerName: string, otherName: string): string[] {
+  return [
+    `Reply with ONE short line of dialogue spoken by ${playerName}, in the first person.`,
+    `Do NOT write ${otherName}'s reply. Do NOT narrate actions or use stage directions or` +
+      ` parentheticals like "(skeptical)" or "(starts typing)". Just say the line out loud.`,
+  ];
 }
 
 function previousConversationPrompt(
@@ -244,6 +263,22 @@ async function previousMessages(
     });
   }
   return llmMessages;
+}
+
+// A friendly "where am I" label for the prompt: the agent's own home reads as "home",
+// any other place reads by name, open ground reads as nothing.
+function placeLabel(
+  player: { position?: { x: number; y: number } },
+  characterName: string,
+): string | null {
+  const pos = player.position;
+  if (!pos) return null;
+  const place = nearestPlace(pos.x, pos.y);
+  if (!place) return null;
+  if (place.type === 'home') {
+    return place.owner === characterName ? 'home' : place.name;
+  }
+  return place.name;
 }
 
 export const queryPromptData = internalQuery({
@@ -333,6 +368,7 @@ export const queryPromptData = internalQuery({
     return {
       player: { name: playerDescription.name, ...player },
       otherPlayer: { name: otherPlayerDescription.name, ...otherPlayer },
+      place: placeLabel(player, playerDescription.name),
       conversation,
       agent: { identity: agentDescription.identity, plan: agentDescription.plan, ...agent },
       otherAgent: otherAgent && {

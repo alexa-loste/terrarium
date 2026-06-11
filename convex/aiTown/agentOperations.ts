@@ -1,6 +1,7 @@
 import { v } from 'convex/values';
-import { internalAction } from '../_generated/server';
+import { internalAction, internalQuery } from '../_generated/server';
 import { WorldMap, serializedWorldMap } from './worldMap';
+import { chooseDestination } from '../../data/places';
 import { rememberConversation } from '../agent/memory';
 import { GameId, agentId, conversationId, playerId } from './ids';
 import {
@@ -113,6 +114,15 @@ export const agentDoSomething = internalAction({
     // Decide whether to do an activity or wander somewhere.
     if (!player.pathfinding) {
       if (recentActivity || justLeftConversation) {
+        // Head toward a meaningful place (their home/work or a shared spot) rather than a
+        // random tile. Falls back to wandering if we can't resolve who this is.
+        const character = await ctx.runQuery(internal.aiTown.agentOperations.getCharacterName, {
+          worldId: args.worldId,
+          playerId: player.id,
+        });
+        const destination = character
+          ? chooseDestination(character, map.width, map.height)
+          : wanderDestination(map);
         await sleep(Math.random() * 1000);
         await ctx.runMutation(api.aiTown.main.sendInput, {
           worldId: args.worldId,
@@ -120,7 +130,7 @@ export const agentDoSomething = internalAction({
           args: {
             operationId: args.operationId,
             agentId: agent.id,
-            destination: wanderDestination(map),
+            destination,
           },
         });
         return;
@@ -176,3 +186,15 @@ function wanderDestination(worldMap: WorldMap) {
     y: 1 + Math.floor(Math.random() * (worldMap.height - 2)),
   };
 }
+
+// Resolve a player's display name (e.g. "Mara") so navigation can pick their home/workplace.
+export const getCharacterName = internalQuery({
+  args: { worldId: v.id('worlds'), playerId },
+  handler: async (ctx, args) => {
+    const description = await ctx.db
+      .query('playerDescriptions')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId).eq('playerId', args.playerId))
+      .first();
+    return description?.name ?? null;
+  },
+});

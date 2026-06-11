@@ -3,6 +3,7 @@ import { useApp } from '@pixi/react';
 import { Player, SelectElement } from './Player.tsx';
 import { useEffect, useRef, useState } from 'react';
 import { PixiStaticMap } from './PixiStaticMap.tsx';
+import PlaceLabels from './PlaceLabels.tsx';
 import PixiViewport from './PixiViewport.tsx';
 import { Viewport } from 'pixi-viewport';
 import { Id } from '../../convex/_generated/dataModel';
@@ -163,6 +164,7 @@ export const PixiGame = (props: {
         onpointerup={onMapPointerUp}
         onpointerdown={onMapPointerDown}
       />
+      <PlaceLabels tileDim={tileDim} />
       {players.map(
         (p) =>
           // Only show the path for the human player in non-debug mode.

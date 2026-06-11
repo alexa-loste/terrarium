@@ -42,12 +42,25 @@ export default function Game() {
   if (!worldId || !engineId || !game) {
     return null;
   }
+  const now = historicalTime ?? Date.now();
+  const conversations = [...game.world.conversations.values()];
+  const agents = [...game.world.agents.values()];
   const roster = [...game.world.players.values()]
     .map((p) => {
       const d = game.playerDescriptions.get(p.id);
-      return d ? { id: p.id, name: d.name, character: d.character } : undefined;
+      if (!d) return undefined;
+      // Mirror the sprite's status logic so the panel shows what each person is doing.
+      const isSpeaking = conversations.some((c) => c.isTyping?.playerId === p.id);
+      const isThinking =
+        !isSpeaking && agents.some((a) => a.playerId === p.id && !!a.inProgressOperation);
+      const activityEmoji =
+        p.activity && p.activity.until > now ? p.activity.emoji : undefined;
+      const status = isSpeaking ? '💬' : isThinking ? '💭' : activityEmoji;
+      return { id: p.id, name: d.name, character: d.character, status };
     })
-    .filter((e): e is { id: GameId<'players'>; name: string; character: string } => !!e);
+    .filter(
+      (e): e is { id: GameId<'players'>; name: string; character: string; status?: string } => !!e,
+    );
   const selectPlayer = (id: GameId<'players'>) => {
     setSelectedElement({ kind: 'player', id });
     setCameraTarget({ id, t: Date.now() });

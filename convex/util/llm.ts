@@ -104,9 +104,22 @@ export function getLLMConfig(): LLMConfig {
     url: process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434',
     chatModel: process.env.OLLAMA_MODEL ?? 'llama3',
     embeddingModel: process.env.OLLAMA_EMBEDDING_MODEL ?? 'mxbai-embed-large',
+    // NOTE: only stop on the true end-of-turn token. Do NOT stop on the header tokens —
+    // the model often emits "<|start_header_id|>assistant<|end_header_id|>" as the very
+    // first tokens of an opening message, so stopping there truncates it to an empty string
+    // (blank first message). stripSpecialTokens() cleans those out of the finished text.
     stopWords: ['<|eot_id|>'],
     apiKey: undefined,
   };
+}
+
+// Local chat models (e.g. Llama via Ollama) sometimes leak their chat-template control
+// tokens into the generated text. Strip them so they don't show up in the UI.
+export function stripSpecialTokens(content: string): string {
+  return content
+    .replace(/<\|start_header_id\|>[\s\S]*?<\|end_header_id\|>/g, '')
+    .replace(/<\|[a-z_]+\|>/g, '')
+    .trim();
 }
 
 const AuthHeaders = (): Record<string, string> =>
@@ -176,7 +189,7 @@ export async function chatCompletion(
         throw new Error('Unexpected result from OpenAI: ' + JSON.stringify(json));
       }
       console.log(content);
-      return content;
+      return stripSpecialTokens(content);
     }
   });
 

@@ -5,6 +5,8 @@ export type RosterEntry = {
   id: GameId<'players'>;
   name: string;
   character: string;
+  // Live status emoji: 💬 speaking, 💭 thinking, or the current activity emoji.
+  status?: string;
 };
 
 // Pull the front-facing ("down") frame out of a character's spritesheet so we can crop a
@@ -40,19 +42,30 @@ export default function CharacterRoster({
               selected ? 'bg-yellow-400/30 ring-2 ring-yellow-300' : 'hover:bg-white/10'
             }`}
           >
-            <div className="h-12 w-12 overflow-hidden rounded-md bg-brown-700">
-              {f && (
-                <div
-                  style={{
-                    width: 32,
-                    height: 32,
-                    transform: 'scale(1.5)',
-                    transformOrigin: 'top left',
-                    backgroundImage: `url(${f.url})`,
-                    backgroundPosition: `-${f.x}px -${f.y}px`,
-                    imageRendering: 'pixelated',
-                  }}
-                />
+            <div className="relative h-12 w-12">
+              <div className="h-12 w-12 overflow-hidden rounded-md bg-brown-700">
+                {f && (
+                  <div
+                    style={{
+                      width: 32,
+                      height: 32,
+                      transform: 'scale(1.5)',
+                      transformOrigin: 'top left',
+                      backgroundImage: `url(${f.url})`,
+                      backgroundPosition: `-${f.x}px -${f.y}px`,
+                      imageRendering: 'pixelated',
+                    }}
+                  />
+                )}
+              </div>
+              {p.status && (
+                <span
+                  className={`absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/75 text-[11px] leading-none shadow ${
+                    p.status === '💬' ? 'animate-pulse ring-1 ring-yellow-300' : ''
+                  }`}
+                >
+                  {p.status}
+                </span>
               )}
             </div>
             <span className="font-body text-[10px] leading-none text-white">{p.name}</span>
