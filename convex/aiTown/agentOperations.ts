@@ -2,6 +2,7 @@ import { v } from 'convex/values';
 import { internalAction, internalQuery } from '../_generated/server';
 import { WorldMap, serializedWorldMap } from './worldMap';
 import { chooseDestination } from '../../data/places';
+import { Phase, timeOfDayPrompt, WorldTime } from '../../data/clock';
 import { composeFeedPost, composeDirectMessage } from './agentComms';
 import { rememberConversation } from '../agent/memory';
 import { GameId, agentId, conversationId, playerId } from './ids';
@@ -114,20 +115,24 @@ export const agentDoSomething = internalAction({
     const recentActivity = player.activity && now < player.activity.until + ACTIVITY_COOLDOWN;
     // Decide whether to do an activity or wander somewhere.
     if (!player.pathfinding) {
+      // What time is it in the world? Drives where agents go and what they post (v1.3).
+      const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, {
+        worldId: args.worldId,
+      });
       // First, on an idle tick, maybe publish to the feed or DM someone (rate-limited).
       // Placed before the wander/activity gates so it's actually reached regularly.
-      if (await maybeDoComms(ctx, args, now)) {
+      if (await maybeDoComms(ctx, args, now, time)) {
         return;
       }
       if (recentActivity || justLeftConversation) {
-        // Head toward a meaningful place (their home/work or a shared spot) rather than a
-        // random tile. Falls back to wandering if we can't resolve who this is.
+        // Head toward a meaningful place driven by the time of day: work by day, the bar or
+        // park in the evening, home at night. Falls back to wandering if we can't resolve who.
         const character = await ctx.runQuery(internal.aiTown.agentOperations.getCharacterName, {
           worldId: args.worldId,
           playerId: player.id,
         });
         const destination = character
-          ? chooseDestination(character, map.width, map.height)
+          ? chooseDestination(character, map.width, map.height, time.phase)
           : wanderDestination(map);
         await sleep(Math.random() * 1000);
         await ctx.runMutation(api.aiTown.main.sendInput, {
@@ -141,8 +146,8 @@ export const agentDoSomething = internalAction({
         });
         return;
       } else {
-        // TODO: have LLM choose the activity & emoji
-        const activity = ACTIVITIES[Math.floor(Math.random() * ACTIVITIES.length)];
+        // Pick an idle activity, biased by the time of day (work during the day, rest at night).
+        const activity = pickActivity(time.phase);
         await sleep(Math.random() * 1000);
         await ctx.runMutation(api.aiTown.main.sendInput, {
           worldId: args.worldId,
@@ -185,6 +190,22 @@ export const agentDoSomething = internalAction({
   },
 });
 
+// A focused "doing work" activity for the working day, plus a calmer night set so agents
+// aren't "grabbing coffee" at 3am. Falls back to the generic ACTIVITIES mix otherwise.
+const WORK_ACTIVITY = { description: 'getting work done', emoji: '💻', duration: 90_000 };
+const NIGHT_ACTIVITIES = ACTIVITIES.filter((a) =>
+  ['reading a book', 'on a phone call', 'people-watching'].includes(a.description),
+);
+
+function pickActivity(phase: Phase) {
+  if (phase === 'work' && Math.random() < 0.6) return WORK_ACTIVITY;
+  if (phase === 'night') {
+    const pool = NIGHT_ACTIVITIES.length ? NIGHT_ACTIVITIES : ACTIVITIES;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  return ACTIVITIES[Math.floor(Math.random() * ACTIVITIES.length)];
+}
+
 function wanderDestination(worldMap: WorldMap) {
   // Wander someonewhere at least one tile away from the edge.
   return {
@@ -221,10 +242,25 @@ async function finishWithActivity(
   });
 }
 
-async function maybeDoComms(ctx: any, args: any, now: number): Promise<boolean> {
+// During the day people are busier on the feed; deep night they mostly go quiet.
+function commsActivityMultiplier(phase: Phase): number {
+  switch (phase) {
+    case 'night':
+      return 0.2;
+    case 'morning':
+      return 0.9;
+    case 'work':
+      return 1.2;
+    case 'evening':
+      return 1.1;
+  }
+}
+
+async function maybeDoComms(ctx: any, args: any, now: number, time: WorldTime): Promise<boolean> {
+  const mult = commsActivityMultiplier(time.phase);
   const roll = Math.random();
-  const wantPost = roll < FEED_POST_CHANCE;
-  const wantDm = !wantPost && roll < FEED_POST_CHANCE + DM_CHANCE;
+  const wantPost = roll < FEED_POST_CHANCE * mult;
+  const wantDm = !wantPost && roll < (FEED_POST_CHANCE + DM_CHANCE) * mult;
   if (!wantPost && !wantDm) return false;
 
   const cc = await ctx.runQuery(internal.aiTown.agentComms.commsContext, {
@@ -232,15 +268,20 @@ async function maybeDoComms(ctx: any, args: any, now: number): Promise<boolean> 
     playerId: args.player.id,
   });
   if (!cc) return false;
+  const timeContext = timeOfDayPrompt(time);
 
   if (wantPost && now - cc.lastFeedPostAt > FEED_POST_COOLDOWN) {
-    const research = RESEARCHERS.has(cc.name) && Math.random() < 0.5;
+    // Researchers publish findings during the working day; otherwise it's a personal post.
+    const research =
+      RESEARCHERS.has(cc.name) &&
+      (time.phase === 'work' ? Math.random() < 0.7 : Math.random() < 0.3);
     const text = await composeFeedPost({
       name: cc.name,
       identity: cc.identity,
       plan: cc.plan,
       memories: cc.memories,
       research,
+      timeContext,
     });
     if (text) {
       await ctx.runMutation(api.feed.postToFeed, {
@@ -268,6 +309,7 @@ async function maybeDoComms(ctx: any, args: any, now: number): Promise<boolean> 
       plan: cc.plan,
       toName: to.name,
       memories: cc.memories,
+      timeContext,
     });
     if (text) {
       await ctx.runMutation(api.directMessages.sendDirectMessage, {

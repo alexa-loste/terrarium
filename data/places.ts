@@ -154,24 +154,58 @@ export function nearestPlace(x: number, y: number): Place | undefined {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-// Pick where a character heads next: biased toward their own home + workplace, otherwise a
-// shared spot to mingle. A little jitter so people don't stack on the exact same tile.
+const placeById = (id: string): Place | undefined => Places.find((p) => p.id === id);
+const randomPlace = (): Place => Places[Math.floor(Math.random() * Places.length)];
+
+// The daily rhythm (v1.3): what an agent gravitates toward depends on the time of day.
+// `phase` comes from data/clock.ts; when omitted we fall back to the old even mix so the
+// function still works without a clock.
+export type DayPhase = 'night' | 'morning' | 'work' | 'evening';
+
+function destinationForPhase(character: string, phase?: DayPhase): Place {
+  const home = homeFor(character);
+  const work = workFor(character);
+  const r = Math.random();
+  switch (phase) {
+    case 'night':
+      // Almost everyone is home asleep; a few night owls drift out.
+      if (home && r < 0.85) return home;
+      return randomPlace();
+    case 'morning':
+      // Waking up: a coffee-and-commute mix of home, the cafe, and heading to work.
+      if (home && r < 0.35) return home;
+      if (r < 0.6) return placeById('cafe') ?? randomPlace();
+      if (work && r < 0.85) return work;
+      return randomPlace();
+    case 'work':
+      // The working day: mostly at your job, sometimes a work-adjacent spot.
+      if (work && r < 0.7) return work;
+      if (r < 0.85) return placeById('coworking') ?? randomPlace();
+      return randomPlace();
+    case 'evening':
+      // Off the clock: the bar, the park, or winding down at home.
+      if (r < 0.4) return placeById('bar') ?? randomPlace();
+      if (r < 0.65) return placeById('park') ?? randomPlace();
+      if (home && r < 0.9) return home;
+      return randomPlace();
+    default:
+      // No clock: the original even-ish mix.
+      if (home && r < 0.3) return home;
+      if (work && r < 0.6) return work;
+      return randomPlace();
+  }
+}
+
+// Pick where a character heads next: biased by the time of day toward their workplace
+// during the day, social spots in the evening, and home at night. A little jitter so
+// people don't stack on the exact same tile.
 export function chooseDestination(
   character: string,
   width = MAP_WIDTH,
   height = MAP_HEIGHT,
+  phase?: DayPhase,
 ): { x: number; y: number } {
-  const home = homeFor(character);
-  const work = workFor(character);
-  const r = Math.random();
-  let target: Place;
-  if (home && r < 0.3) {
-    target = home;
-  } else if (work && r < 0.6) {
-    target = work;
-  } else {
-    target = Places[Math.floor(Math.random() * Places.length)];
-  }
+  const target = destinationForPhase(character, phase);
   const jitter = () => Math.round((Math.random() - 0.5) * 2 * target.radius);
   return {
     x: clamp(target.x + jitter(), 1, width - 2),

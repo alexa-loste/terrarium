@@ -12,6 +12,7 @@ import { DebugTimeManager } from './DebugTimeManager.tsx';
 import { GameId } from '../../convex/aiTown/ids.ts';
 import { useServerGame } from '../hooks/serverGame.ts';
 import CharacterRoster from './CharacterRoster.tsx';
+import WorldClock from './WorldClock.tsx';
 
 export const SHOW_DEBUG_UI = !!import.meta.env.VITE_SHOW_DEBUG_UI;
 
@@ -91,6 +92,7 @@ https://github.com/michalochman/react-pixi-fiber/issues/145#issuecomment-5315492
               </Stage>
             </div>
           </div>
+          <WorldClock worldId={worldId} />
         </div>
         {/* Right column area */}
         <div

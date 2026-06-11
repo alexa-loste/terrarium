@@ -89,9 +89,11 @@ export async function composeFeedPost(args: {
   plan: string;
   memories: string[];
   research: boolean;
+  timeContext?: string;
 }): Promise<string> {
   const prompt =
     `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    (args.timeContext ? `${args.timeContext}\n` : '') +
     `Write ONE short public post for the town feed (the town's "internet"), in your own voice ` +
     `and opinions, under 200 characters. ` +
     (args.research
@@ -112,9 +114,11 @@ export async function composeDirectMessage(args: {
   plan: string;
   toName: string;
   memories: string[];
+  timeContext?: string;
 }): Promise<string> {
   const prompt =
     `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    (args.timeContext ? `${args.timeContext}\n` : '') +
     `Write ONE short direct message to ${args.toName} (you can reach them even though they ` +
     `aren't nearby), under 200 characters, in your own voice. It might be a question, an ` +
     `invitation, a reaction to recent news, or something on your mind. No quotation marks. ` +

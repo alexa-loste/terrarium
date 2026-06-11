@@ -8,6 +8,7 @@ import * as embeddingsCache from './embeddingsCache';
 import { GameId, conversationId, playerId } from '../aiTown/ids';
 import { NUM_MEMORIES_TO_SEARCH } from '../constants';
 import { nearestPlace } from '../../data/places';
+import { timeOfDayPrompt, WorldTime } from '../../data/clock';
 
 const selfInternal = internal.agent.conversation;
 
@@ -42,8 +43,10 @@ export async function startConversationMessage(
   const memoryWithOtherPlayer = memories.find(
     (m) => m.data.type === 'conversation' && m.data.playerIds.includes(otherPlayerId),
   );
+  const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, { worldId });
   const prompt = [
     `You are ${player.name}, and you just started a conversation with ${otherPlayer.name}.`,
+    timeOfDayPrompt(time),
   ];
   if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
@@ -98,16 +101,15 @@ export async function continueConversationMessage(
       conversationId,
     },
   );
-  const now = Date.now();
-  const started = new Date(conversation.created);
   const embedding = await embeddingsCache.fetch(
     ctx,
     `What do you think about ${otherPlayer.name}?`,
   );
   const memories = await memory.searchMemories(ctx, player.id as GameId<'players'>, embedding, 3);
+  const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, { worldId });
   const prompt = [
     `You are ${player.name}, and you're currently in a conversation with ${otherPlayer.name}.`,
-    `The conversation started at ${started.toLocaleString()}. It's now ${now.toLocaleString()}.`,
+    timeOfDayPrompt(time),
   ];
   if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));

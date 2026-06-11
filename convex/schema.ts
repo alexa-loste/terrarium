@@ -53,6 +53,14 @@ export default defineSchema({
     lastDmAt: v.optional(v.number()),
   }).index('playerId', ['worldId', 'playerId']),
 
+  // The anchored day/night clock (v1.3). One row per world; see data/clock.ts + convex/clock.ts.
+  worldClock: defineTable({
+    worldId: v.id('worlds'),
+    epochRealMs: v.number(),
+    epochWorldMs: v.number(),
+    speed: v.number(),
+  }).index('worldId', ['worldId']),
+
   ...agentTables,
   ...aiTownTables,
   ...engineTables,
