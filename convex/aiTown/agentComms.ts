@@ -218,16 +218,26 @@ export async function composeArtifact(args: {
       args.recent.map((r) => `- ${r.authorName}'s ${r.workType}: "${r.title}"`).join('\n') +
       '\n'
     : '';
+  // Note: we deliberately do NOT feed in recent memories here. Those are mostly conversation
+  // recaps ("I talked with X about Y"), and the model parrots them back as the artifact —
+  // producing a chatty status update instead of real work. Ground the piece in role + beliefs.
   const prompt =
-    `You are ${args.name}. ${args.identity}\n${args.plan}\n${memBlock(args.memories)}` +
+    `You are ${args.name}. ${args.identity}\n${args.plan}\n` +
     beliefBlock(args.beliefs) +
     (args.placeName ? `You're working at ${args.placeName}.\n` : '') +
     (args.timeContext ? `${args.timeContext}\n` : '') +
     recentBlock +
-    `Produce a real piece of work — ${args.brief}\n` +
-    `Give it a TITLE (under 70 characters) and a BODY of 2-4 sentences. Write it for real, in ` +
-    `your own voice and point of view — not a description of writing it. ` +
-    `If you are responding to someone's recent work above, name them in the body.\n` +
+    `Produce a real, finished piece of work — ${args.brief}\n` +
+    `This is the WORK ITSELF — the kind of thing that sits in the town library with your name ` +
+    `on it and that a stranger could read years from now and learn something concrete. Put real ` +
+    `substance in it: a specific claim, finding, proposal, argument, or described creation that ` +
+    `stands on its own.\n` +
+    `Do NOT recap your day or a conversation. Do NOT begin with "Just had a chat/talk with…", ` +
+    `do NOT write a social-media update, a status post, or a note about how you feel. No "I had ` +
+    `a great conversation with…". Write the actual content of the work.\n` +
+    `Give it a TITLE that is a real headline for the piece (under 70 characters) and a BODY of ` +
+    `2-4 substantive sentences, in your own voice and point of view. If you are deliberately ` +
+    `responding to someone's published work above, engage its actual argument and name them.\n` +
     `Format EXACTLY as:\nTITLE: <the title>\nBODY: <the body>`;
   const { content } = await chatCompletion({
     messages: [{ role: 'user', content: prompt }],
