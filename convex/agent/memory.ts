@@ -410,7 +410,10 @@ async function calculateImportance(description: string) {
       },
     ],
     temperature: 0.0,
-    max_tokens: 1,
+    // Was 1, but some local models (e.g. deepseek-v2) preface the digit with a word, so a
+    // 1-token cap yields no number and importance silently falls back to a constant. A few
+    // tokens lets the digit appear; the regex below extracts it. Llama still answers tersely.
+    max_tokens: 6,
   });
 
   let importance = parseFloat(importanceRaw);
