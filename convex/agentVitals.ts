@@ -54,6 +54,32 @@ export const setVitals = internalMutation({
   },
 });
 
+// Add to (or subtract from) a player's wallet without needing to know the current balance —
+// used when shipping a deliverable pays out (v1.9). Floors at 0.
+export const addMoney = internalMutation({
+  args: { worldId: v.id('worlds'), playerId, amount: v.number() },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query('agentVitals')
+      .withIndex('playerId', (q) => q.eq('worldId', args.worldId).eq('playerId', args.playerId))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, { money: Math.max(0, (existing.money ?? STARTING_MONEY) + args.amount) });
+    } else {
+      await ctx.db.insert('agentVitals', {
+        worldId: args.worldId,
+        playerId: args.playerId,
+        energy: MAX_ENERGY,
+        asleep: false,
+        lastConsolidatedDay: 0,
+        food: MAX_FOOD,
+        money: Math.max(0, STARTING_MONEY + args.amount),
+        social: START_SOCIAL,
+      });
+    }
+  },
+});
+
 // All agents' vitals for the world, for the roster display.
 export const listVitals = query({
   args: { worldId: v.id('worlds') },

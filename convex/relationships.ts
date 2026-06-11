@@ -213,6 +213,14 @@ export const listReputation = query({
       const prev = score.get(e.toPlayerId) ?? 0;
       score.set(e.toPlayerId, prev + (e.affinity - NEUTRAL) + (e.respect - NEUTRAL));
     }
+    // v1.9 — chronically flaking at work costs you standing: subtract the work penalty.
+    const work = await ctx.db
+      .query('workState')
+      .withIndex('author', (q) => q.eq('worldId', args.worldId))
+      .collect();
+    for (const w of work) {
+      if (w.standingPenalty) score.set(w.playerId, (score.get(w.playerId) ?? 0) - w.standingPenalty);
+    }
     return [...score.entries()].map(([pid, prestige]) => ({ playerId: pid, prestige }));
   },
 });

@@ -9,6 +9,7 @@ import { useSendInput } from '../hooks/sendInput';
 import { Player } from '../../convex/aiTown/player';
 import { GameId } from '../../convex/aiTown/ids';
 import { ServerGame } from '../hooks/serverGame';
+import { jobLabel } from '../../data/work';
 
 export default function PlayerDetails({
   worldId,
@@ -68,6 +69,11 @@ export default function PlayerDetails({
 
   const beliefs = useQuery(
     api.beliefs.getForPlayer,
+    playerId ? { worldId, playerId } : 'skip',
+  );
+
+  const work = useQuery(
+    api.work.getForPlayer,
     playerId ? { worldId, playerId } : 'skip',
   );
 
@@ -298,6 +304,24 @@ export default function PlayerDetails({
             {myRank > 0 && rankedReputation.length > 1 && (
               <span className="text-brown-300"> · #{myRank} of {rankedReputation.length}</span>
             )}
+          </h2>
+        </div>
+      )}
+      {work && playerDescription && (
+        <div className="box flex-grow mt-4">
+          <h2 className="bg-brown-700 text-base text-center">
+            💼 {jobLabel(playerDescription.name)}
+            {work.quota != null && (
+              <span className="text-brown-300">
+                {' '}
+                · {work.deliverablesThisCycle}/{work.quota} this cycle
+              </span>
+            )}
+            {work.behind ? (
+              <span className="text-red-300"> · behind ⚠️</span>
+            ) : work.missedCount === 0 ? (
+              <span className="text-emerald-300"> · on track</span>
+            ) : null}
           </h2>
         </div>
       )}

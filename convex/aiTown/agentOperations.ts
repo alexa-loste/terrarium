@@ -21,6 +21,7 @@ import {
   assessBeliefDrift,
 } from './agentComms';
 import { workOutputFor } from '../../data/artifacts';
+import { isScheduled, withinShift, jobFor, deliverablePay } from '../../data/work';
 import { fetchEmbedding } from '../util/llm';
 import { rememberConversation, reflectOnMemories } from '../agent/memory';
 import { writeJournalEntry } from '../agent/journal';
@@ -152,6 +153,10 @@ export const agentDoSomething = internalAction({
       // energy/food/social, earn wages while working, and eat when hungry. Returns true if this
       // tick was consumed (asleep or eating), in which case we skip the waking behavior below.
       if (await tickVitals(ctx, args, now, time, character, vitals)) {
+        return;
+      }
+      // If you're a scheduled worker and your shift is on, get to your workplace (v1.9).
+      if (await maybeGoToWork(ctx, args, time, character)) {
         return;
       }
       // While actually at work during work hours, sometimes produce a real artifact — a
@@ -354,6 +359,26 @@ async function tickVitals(
         await writeJournalEntry(ctx, args.worldId, args.agent.id, args.player.id, 'reflection');
         // ...and the day may have nudged their convictions (v1.8 nightly belief drift).
         await driftBeliefs(ctx, args);
+        // Reckon the day's work obligation: falling short bites (money + standing) and they
+        // stew on it in their journal (v1.9).
+        if (character) {
+          const verdict = await ctx.runMutation(internal.work.evaluate, {
+            worldId: args.worldId,
+            playerId: args.player.id,
+            playerName: character,
+            day: time.day,
+          });
+          if (verdict.message) {
+            await writeJournalEntry(
+              ctx,
+              args.worldId,
+              args.agent.id,
+              args.player.id,
+              'event',
+              verdict.message,
+            );
+          }
+        }
         await set({ energy: MAX_ENERGY, asleep: true, lastConsolidatedDay: time.day });
       } else {
         await set({ asleep: true });
@@ -371,9 +396,21 @@ async function tickVitals(
   let nextFood = Math.max(0, food - FOOD_DRAIN);
   let nextMoney = money;
 
-  // Earn your wage for working your job during work hours.
-  if (time.phase === 'work' && atWorkplace(character, args.player.position)) {
-    nextMoney += wageFor(character!);
+  // Scheduled workers earn their wage while on shift at their workplace — and being there
+  // counts as showing up today (v1.9). Deliverable workers are paid per shipped piece instead.
+  if (
+    character &&
+    isScheduled(character) &&
+    withinShift(character, time.hour) &&
+    atWorkplace(character, args.player.position)
+  ) {
+    nextMoney += wageFor(character);
+    await ctx.runMutation(internal.work.markAttended, {
+      worldId: args.worldId,
+      playerId: args.player.id,
+      playerName: character,
+      day: time.day,
+    });
   }
 
   // Hungry and can afford a meal? Eat right where you are (price depends on the venue).
@@ -577,7 +614,13 @@ async function maybeMakeArtifact(
 ): Promise<boolean> {
   if (time.phase !== 'work' || !character) return false;
   if (!atWorkplace(character, args.player.position)) return false;
-  if (Math.random() >= ARTIFACT_CHANCE) return false;
+  // Behind on your deliverables? You push harder to ship (v1.9).
+  const ws = await ctx.runQuery(api.work.getForPlayer, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+  });
+  const chance = ws?.behind ? ARTIFACT_CHANCE * 1.8 : ARTIFACT_CHANCE;
+  if (Math.random() >= chance) return false;
 
   const cc = await ctx.runQuery(internal.aiTown.agentComms.commsContext, {
     worldId: args.worldId,
@@ -653,6 +696,20 @@ async function maybeMakeArtifact(
     playerName: cc.name,
     emoji: output.emoji,
   });
+  // Count it toward the quota, and pay deliverable workers for shipping (v1.9).
+  await ctx.runMutation(internal.work.recordDeliverable, {
+    worldId: args.worldId,
+    playerId: args.player.id,
+    playerName: character,
+    day: time.day,
+  });
+  if (jobFor(character).kind === 'deliverable') {
+    await ctx.runMutation(internal.agentVitals.addMoney, {
+      worldId: args.worldId,
+      playerId: args.player.id,
+      amount: deliverablePay(character),
+    });
+  }
   // Sometimes they journal about the work they just made (v1.7).
   if (Math.random() < 0.4) {
     await writeJournalEntry(ctx, args.worldId, args.agent.id, args.player.id, 'artifact', piece.title);
@@ -806,6 +863,34 @@ async function maybeReactToWork(ctx: any, args: any, now: number, time: WorldTim
     emoji: '👀',
   });
   await finishWithActivity(ctx, args, `reading ${piece.authorName}'s ${piece.workType}`, '👀', now, 30_000);
+  return true;
+}
+
+// Scheduled workers have to be at their workplace during their shift (v1.9). If on shift and
+// not there, head over (with a small chance of a detour, so it isn't robotic). Being there is
+// what earns the wage + counts as showing up (handled in tickVitals).
+async function maybeGoToWork(
+  ctx: any,
+  args: any,
+  time: WorldTime,
+  character: string | null,
+): Promise<boolean> {
+  if (!character || !isScheduled(character)) return false;
+  if (!withinShift(character, time.hour)) return false;
+  if (atWorkplace(character, args.player.position)) return false;
+  if (Math.random() < 0.2) return false; // a short break / detour
+  const w = workFor(character);
+  if (!w) return false;
+  await sleep(Math.random() * 1000);
+  await ctx.runMutation(api.aiTown.main.sendInput, {
+    worldId: args.worldId,
+    name: 'finishDoSomething',
+    args: {
+      operationId: args.operationId,
+      agentId: args.agent.id,
+      destination: { x: w.x, y: w.y },
+    },
+  });
   return true;
 }
 

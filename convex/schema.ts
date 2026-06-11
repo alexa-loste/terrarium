@@ -57,6 +57,23 @@ export default defineSchema({
     lastReactAt: v.optional(v.number()),
   }).index('playerId', ['worldId', 'playerId']),
 
+  // Work obligation + standing (v1.9): each character's job cadence state. Scheduled workers
+  // track whether they showed up today; deliverable workers track output this cycle. Falling
+  // behind sets `behind` (drives stress) and accrues `standingPenalty` (subtracted from their
+  // reputation until they recover). See data/work.ts + convex/work.ts.
+  workState: defineTable({
+    worldId: v.id('worlds'),
+    playerId,
+    playerName: v.string(),
+    lastEvalDay: v.number(), // last world-day we ran the daily evaluation
+    attendedToday: v.boolean(), // scheduled: showed up to the shift today
+    cycleStartDay: v.number(), // deliverable: when the current quota cycle began
+    deliverablesThisCycle: v.number(),
+    behind: v.boolean(), // currently failing the obligation (drives stress + catch-up)
+    standingPenalty: v.number(), // points subtracted from reputation; decays as they recover
+    missedCount: v.number(), // cumulative missed shifts / short cycles
+  }).index('author', ['worldId', 'playerId']),
+
   // Beliefs (v1.8): each character's convictions, seeded from their profile (data/beliefs.ts)
   // and evolving over time. They color the work a character makes and how they argue, and they
   // shift — slowly each night, and sharply when a controversial piece or a heated disagreement
