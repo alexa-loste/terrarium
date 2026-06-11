@@ -51,6 +51,11 @@ export default function PlayerDetails({
     playerId ? { worldId, playerId } : 'skip',
   );
 
+  const relationships = useQuery(
+    api.relationships.getRelationships,
+    playerId ? { worldId, playerId } : 'skip',
+  );
+
   const playerDescription = playerId && game.playerDescriptions.get(playerId);
 
   const startConversation = useSendInput(engineId, 'startConversation');
@@ -261,6 +266,32 @@ export default function PlayerDetails({
             humanPlayer={humanPlayer}
             scrollViewRef={scrollViewRef}
           />
+        </>
+      )}
+      {relationships && relationships.length > 0 && (
+        <>
+          <div className="box flex-grow mt-6">
+            <h2 className="bg-brown-700 text-lg text-center">🫶 Relationships</h2>
+          </div>
+          <div className="mt-2 space-y-1">
+            {relationships.slice(0, 6).map((r) => {
+              const name =
+                game.playerDescriptions.get(r.toPlayerId as GameId<'players'>)?.name ?? 'someone';
+              const a = r.affinity;
+              const label =
+                a >= 80 ? 'close' : a >= 65 ? 'warm' : a >= 55 ? 'friendly' : a > 45 ? 'neutral' : a >= 30 ? 'cool' : 'tense';
+              return (
+                <div
+                  key={r.toPlayerId}
+                  className="flex items-center gap-2 bg-brown-700 px-2 py-1 text-sm"
+                >
+                  <span className="font-bold">{name}</span>
+                  {r.romantic > 20 && <span title="a spark">❤️</span>}
+                  <span className="ml-auto text-xs text-brown-200">{label}</span>
+                </div>
+              );
+            })}
+          </div>
         </>
       )}
       {inbox && inbox.length > 0 && (

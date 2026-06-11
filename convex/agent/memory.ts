@@ -103,6 +103,16 @@ export async function rememberConversation(
       subjectName: otherPlayer.name,
       emoji: '💬',
     });
+    // Update the relationship graph + both social bars from how the conversation landed.
+    const effect = await assessConversation(player, otherPlayer, messages);
+    await ctx.runMutation(internal.relationships.applyConversationOutcome, {
+      worldId,
+      aPlayerId: player.id,
+      aName: player.name,
+      bPlayerId: otherPlayer.id,
+      bName: otherPlayer.name,
+      ...effect,
+    });
   }
   return description;
 }
@@ -138,6 +148,35 @@ async function narrateConversation(
     .trim();
   // Loose safety net only — let a normal 1-2 sentence gist through whole; trim true runaways.
   return hardCap(cleaned, 360);
+}
+
+// Rate how a finished conversation moved the two people's relationship: warmth (liking),
+// respect (esteem), trust — each a small integer -3..3. One cheap call, parsed leniently so a
+// chatty local model can't break it; defaults to neutral on any trouble.
+async function assessConversation(
+  player: { id: string; name: string },
+  otherPlayer: { id: string; name: string },
+  messages: Doc<'messages'>[],
+): Promise<{ warmth: number; respect: number; trust: number }> {
+  const transcript = messages
+    .map((m) => `${m.author === player.id ? player.name : otherPlayer.name}: ${m.text}`)
+    .join('\n');
+  const { content } = await chatCompletion({
+    messages: [
+      {
+        role: 'user',
+        content:
+          `Here is a conversation between ${player.name} and ${otherPlayer.name}:\n\n${transcript}\n\n` +
+          `Rate how this conversation changed their relationship on three scales, each a single ` +
+          `integer from -3 (much worse) to 3 (much better): warmth (do they like each other ` +
+          `more?), respect, and trust. Reply with ONLY three integers separated by spaces, e.g. "2 1 0".`,
+      },
+    ],
+    temperature: 0,
+    max_tokens: 16,
+  });
+  const nums = (content.match(/-?\d+/g) ?? []).map((n) => Math.max(-3, Math.min(3, parseInt(n, 10))));
+  return { warmth: nums[0] ?? 0, respect: nums[1] ?? 0, trust: nums[2] ?? 0 };
 }
 
 // Keep chronicle entries scannable even if the local model rambles past the asked length:

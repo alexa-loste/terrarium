@@ -15,7 +15,7 @@ import {
 import { composeFeedPost, composeDirectMessage, composeThought } from './agentComms';
 import { fetchEmbedding } from '../util/llm';
 import { rememberConversation, reflectOnMemories } from '../agent/memory';
-import { MAX_ENERGY } from '../agentVitals';
+import { MAX_ENERGY, START_SOCIAL } from '../agentVitals';
 import { GameId, agentId, conversationId, playerId } from './ids';
 import {
   continueConversationMessage,
@@ -130,20 +130,24 @@ export const agentDoSomething = internalAction({
       const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, {
         worldId: args.worldId,
       });
-      // Resolve who this is once (used for vitals/work and for choosing a destination).
+      // Resolve who this is + their vitals once (shared by the steps below).
       const character = await ctx.runQuery(internal.aiTown.agentOperations.getCharacterName, {
         worldId: args.worldId,
         playerId: player.id,
       });
+      const vitals = await ctx.runQuery(internal.agentVitals.getVitals, {
+        worldId: args.worldId,
+        playerId: player.id,
+      });
       // Tick needs + economy: sleep at night (+ overnight consolidation), otherwise drain
-      // energy/food, earn wages while working, and eat when hungry. Returns true if this tick
-      // was consumed (asleep or eating), in which case we skip the waking behavior below.
-      if (await tickVitals(ctx, args, now, time, character)) {
+      // energy/food/social, earn wages while working, and eat when hungry. Returns true if this
+      // tick was consumed (asleep or eating), in which case we skip the waking behavior below.
+      if (await tickVitals(ctx, args, now, time, character, vitals)) {
         return;
       }
-      // First, on an idle tick, maybe publish to the feed or DM someone (rate-limited).
-      // Placed before the wander/activity gates so it's actually reached regularly.
-      if (await maybeDoComms(ctx, args, now, time)) {
+      // First, on an idle tick, maybe publish to the feed or DM someone (rate-limited). A lonely
+      // agent (low social) reaches out more. Placed before the wander/activity gates.
+      if (await maybeDoComms(ctx, args, now, time, vitals)) {
         return;
       }
       // Otherwise, maybe just have a passing thought (their stream of consciousness, v1.3).
@@ -277,6 +281,7 @@ async function finishWithActivity(
 // (reflectOnMemories) which recharges their energy. By day they're awake and energy drains a
 // little with each thing they do. Returns true if the agent is asleep (caller should stop).
 const ENERGY_DRAIN = 4; // per waking idle decision
+const SOCIAL_DECAY = 1; // social slowly fades with time; conversations/posts replenish it
 const SLEEP_DURATION = 60_000; // re-decide ~once a minute while asleep (cheap; no LLM)
 
 // True if the agent is standing at their workplace (so working there earns their wage).
@@ -293,15 +298,13 @@ async function tickVitals(
   now: number,
   time: WorldTime,
   character: string | null,
+  vitals: any,
 ): Promise<boolean> {
-  const vitals = await ctx.runQuery(internal.agentVitals.getVitals, {
-    worldId: args.worldId,
-    playerId: args.player.id,
-  });
   const asleep = vitals?.asleep ?? false;
   const energy = vitals?.energy ?? MAX_ENERGY;
   const food = vitals?.food ?? MAX_FOOD;
   const money = vitals?.money ?? STARTING_MONEY;
+  const social = vitals?.social ?? START_SOCIAL;
   const lastDay = vitals?.lastConsolidatedDay ?? 0;
 
   const set = (patch: any) =>
@@ -329,6 +332,7 @@ async function tickVitals(
   const patch: any = {};
   if (asleep) patch.asleep = false;
   patch.energy = Math.max(0, energy - ENERGY_DRAIN);
+  patch.social = Math.max(0, social - SOCIAL_DECAY);
   let nextFood = Math.max(0, food - FOOD_DRAIN);
   let nextMoney = money;
 
@@ -380,12 +384,32 @@ function commsActivityMultiplier(phase: Phase): number {
   }
 }
 
-async function maybeDoComms(ctx: any, args: any, now: number, time: WorldTime): Promise<boolean> {
-  const mult = commsActivityMultiplier(time.phase);
+// Publishing/messaging is also self-expression and reaching out — it nudges social up.
+const POST_SOCIAL_GAIN = 3;
+const DM_SOCIAL_GAIN = 2;
+
+async function maybeDoComms(
+  ctx: any,
+  args: any,
+  now: number,
+  time: WorldTime,
+  vitals: any,
+): Promise<boolean> {
+  const social = vitals?.social ?? START_SOCIAL;
+  // The lonelier you are, the more you reach out.
+  const socialNeed = social < 40 ? 1.6 : social < 70 ? 1.1 : 0.9;
+  const mult = commsActivityMultiplier(time.phase) * socialNeed;
   const roll = Math.random();
   const wantPost = roll < FEED_POST_CHANCE * mult;
   const wantDm = !wantPost && roll < (FEED_POST_CHANCE + DM_CHANCE) * mult;
   if (!wantPost && !wantDm) return false;
+
+  const bumpSocial = (gain: number) =>
+    ctx.runMutation(internal.agentVitals.setVitals, {
+      worldId: args.worldId,
+      playerId: args.player.id,
+      social: Math.min(100, social + gain),
+    });
 
   const cc = await ctx.runQuery(internal.aiTown.agentComms.commsContext, {
     worldId: args.worldId,
@@ -420,6 +444,7 @@ async function maybeDoComms(ctx: any, args: any, now: number, time: WorldTime): 
         playerId: args.player.id,
         at: now,
       });
+      await bumpSocial(POST_SOCIAL_GAIN);
       await finishWithActivity(ctx, args, 'posting to the feed', '📝', now);
       return true;
     }
@@ -448,6 +473,7 @@ async function maybeDoComms(ctx: any, args: any, now: number, time: WorldTime): 
         playerId: args.player.id,
         at: now,
       });
+      await bumpSocial(DM_SOCIAL_GAIN);
       await finishWithActivity(ctx, args, `messaging ${to.name}`, '✉️', now);
       return true;
     }

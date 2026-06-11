@@ -98,7 +98,27 @@ export default defineSchema({
     lastConsolidatedDay: v.number(), // world-day index of the last overnight reflection
     food: v.optional(v.number()), // 0..100
     money: v.optional(v.number()),
+    social: v.optional(v.number()), // 0..100 — feeling connected/supported/liked (v1.5)
   }).index('playerId', ['worldId', 'playerId']),
+
+  // The relationship graph (v1.5): a directed edge per ordered pair, holding how `from` feels
+  // about `to` across a few dimensions. Updated from conversation outcomes and persisting as
+  // numbers even after the conversation text is gisted away. Reputation is derived from the
+  // inbound edges (see convex/relationships.ts).
+  relationships: defineTable({
+    worldId: v.id('worlds'),
+    fromPlayerId: playerId,
+    toPlayerId: playerId,
+    familiarity: v.number(), // 0..100 — how well they know them
+    affinity: v.number(), // 0..100 — warmth / liking (50 = neutral)
+    respect: v.number(), // 0..100 — esteem (50 = neutral)
+    trust: v.number(), // 0..100 (50 = neutral)
+    romantic: v.number(), // 0..100 — romantic feeling (0 = none)
+    updatedAt: v.number(),
+  })
+    .index('edge', ['worldId', 'fromPlayerId', 'toPlayerId'])
+    .index('inbound', ['worldId', 'toPlayerId'])
+    .index('outbound', ['worldId', 'fromPlayerId']),
 
   ...agentTables,
   ...aiTownTables,

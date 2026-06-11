@@ -8,6 +8,7 @@ import { MAX_FOOD, STARTING_MONEY } from '../data/economy';
 // eating (costs money). Money is earned by working. Read by the UI; written from agentOperations.
 
 export const MAX_ENERGY = 100;
+export const START_SOCIAL = 60;
 
 export const getVitals = internalQuery({
   args: { worldId: v.id('worlds'), playerId },
@@ -28,6 +29,7 @@ export const setVitals = internalMutation({
     lastConsolidatedDay: v.optional(v.number()),
     food: v.optional(v.number()),
     money: v.optional(v.number()),
+    social: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { worldId, playerId: pid, ...patch } = args;
@@ -46,6 +48,7 @@ export const setVitals = internalMutation({
         lastConsolidatedDay: patch.lastConsolidatedDay ?? 0,
         food: patch.food ?? MAX_FOOD,
         money: patch.money ?? STARTING_MONEY,
+        social: patch.social ?? START_SOCIAL,
       });
     }
   },
@@ -65,6 +68,7 @@ export const listVitals = query({
       asleep: r.asleep,
       food: r.food ?? MAX_FOOD,
       money: r.money ?? STARTING_MONEY,
+      social: r.social ?? START_SOCIAL,
     }));
   },
 });

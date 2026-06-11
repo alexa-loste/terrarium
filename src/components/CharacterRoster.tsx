@@ -13,6 +13,8 @@ export type RosterEntry = {
   // v1.4 economy: food 0..100 and money (wallet).
   food?: number;
   money?: number;
+  // v1.5 social: 0..100 — feeling connected / supported / liked.
+  social?: number;
 };
 
 // Bar color: green when full, amber mid, red when running low.
@@ -101,6 +103,9 @@ export default function CharacterRoster({
             )}
             {typeof p.food === 'number' && (
               <Bar icon="🍔" label="Food" value={p.food} color={barColor(p.food)} />
+            )}
+            {typeof p.social === 'number' && (
+              <Bar icon="🫶" label="Social" value={p.social} color={barColor(p.social)} />
             )}
             {typeof p.money === 'number' && (
               <span className="font-body text-[9px] leading-none text-emerald-300" title="Money">
