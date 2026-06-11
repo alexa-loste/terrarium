@@ -189,11 +189,11 @@ function agentPrompts(
 ): string[] {
   const prompt = [];
   if (agent) {
-    prompt.push(`About you: ${agent.identity}`);
-    prompt.push(`Your goals for the conversation: ${agent.plan}`);
+    prompt.push(`Who you are: ${agent.identity}`);
+    prompt.push(`What you want right now: ${agent.plan}`);
   }
   if (otherAgent) {
-    prompt.push(`About ${otherPlayer.name}: ${otherAgent.identity}`);
+    prompt.push(`About ${otherPlayer.name}, in their own words: ${otherAgent.identity}`);
   }
   return prompt;
 }

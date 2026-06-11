@@ -23,6 +23,7 @@ export const PixiGame = (props: {
   width: number;
   height: number;
   setSelectedElement: SelectElement;
+  cameraTarget?: { id: Id<'players'> | string; t: number };
 }) => {
   // PIXI setup.
   const pixiApp = useApp();
@@ -92,6 +93,61 @@ export const PixiGame = (props: {
       scale: 1.5,
     });
   }, [humanPlayerId]);
+
+  // WASD / arrow keys pan the camera (in addition to click-and-drag).
+  useEffect(() => {
+    const PAN_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
+    const pressed = new Set<string>();
+    const isTyping = () => {
+      const tag = (document.activeElement?.tagName ?? '').toLowerCase();
+      return tag === 'input' || tag === 'textarea';
+    };
+    const onDown = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (isTyping() || !PAN_KEYS.includes(k)) return;
+      pressed.add(k);
+      e.preventDefault();
+    };
+    const onUp = (e: KeyboardEvent) => pressed.delete(e.key.toLowerCase());
+    const onBlur = () => pressed.clear();
+    const tick = () => {
+      const viewport = viewportRef.current;
+      if (!viewport || pressed.size === 0) return;
+      // Keep on-screen pan speed constant regardless of zoom.
+      const step = 14 / viewport.scale.x;
+      let dx = 0;
+      let dy = 0;
+      if (pressed.has('w') || pressed.has('arrowup')) dy -= step;
+      if (pressed.has('s') || pressed.has('arrowdown')) dy += step;
+      if (pressed.has('a') || pressed.has('arrowleft')) dx -= step;
+      if (pressed.has('d') || pressed.has('arrowright')) dx += step;
+      if (dx || dy) viewport.moveCenter(viewport.center.x + dx, viewport.center.y + dy);
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    window.addEventListener('blur', onBlur);
+    pixiApp.ticker.add(tick);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      window.removeEventListener('blur', onBlur);
+      pixiApp.ticker.remove(tick);
+    };
+  }, [pixiApp]);
+
+  // Fly the camera to a player when one is picked from the roster (Sims-style select).
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !props.cameraTarget) return;
+    const target = props.game.world.players.get(props.cameraTarget.id as any);
+    if (!target) return;
+    viewport.animate({
+      position: new PIXI.Point(target.position.x * tileDim, target.position.y * tileDim),
+      scale: Math.max(viewport.scale.x, 1.5),
+      time: 600,
+      ease: 'easeInOutSine',
+    });
+  }, [props.cameraTarget?.t]);
 
   return (
     <PixiViewport

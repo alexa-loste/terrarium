@@ -15,6 +15,7 @@ export const Character = ({
   emoji = '',
   isViewer = false,
   speed = 0.1,
+  name = '',
   onClick,
 }: {
   // Path to the texture packed image.
@@ -35,6 +36,8 @@ export const Character = ({
   isViewer?: boolean;
   // The speed of the animation. Can be tuned depending on the side and speed of the NPC.
   speed?: number;
+  // Display name rendered above the sprite's head.
+  name?: string;
   onClick: () => void;
 }) => {
   const [spriteSheet, setSpriteSheet] = useState<Spritesheet>();
@@ -104,9 +107,21 @@ export const Character = ({
       {emoji && (
         <Text x={0} y={-24} scale={{ x: -0.8, y: 0.8 }} text={emoji} anchor={{ x: 0.5, y: 0.5 }} />
       )}
+      {name && (
+        <Text text={name} x={0} y={-15} scale={0.5} anchor={{ x: 0.5, y: 1 }} style={nameStyle} />
+      )}
     </Container>
   );
 };
+
+const nameStyle = new PIXI.TextStyle({
+  fontFamily: '"VCR OSD Mono", monospace',
+  fontSize: 24,
+  fill: '#ffffff',
+  stroke: '#15131c',
+  strokeThickness: 6,
+  align: 'center',
+});
 
 function ViewerIndicator() {
   const draw = useCallback((g: PIXI.Graphics) => {

@@ -11,6 +11,7 @@ import { useHistoricalTime } from '../hooks/useHistoricalTime.ts';
 import { DebugTimeManager } from './DebugTimeManager.tsx';
 import { GameId } from '../../convex/aiTown/ids.ts';
 import { useServerGame } from '../hooks/serverGame.ts';
+import CharacterRoster from './CharacterRoster.tsx';
 
 export const SHOW_DEBUG_UI = !!import.meta.env.VITE_SHOW_DEBUG_UI;
 
@@ -20,6 +21,8 @@ export default function Game() {
     kind: 'player';
     id: GameId<'players'>;
   }>();
+  // Bumped whenever we want the camera to fly to a player (the `t` forces re-fire on repeat clicks).
+  const [cameraTarget, setCameraTarget] = useState<{ id: GameId<'players'>; t: number }>();
   const [gameWrapperRef, { width, height }] = useElementSize();
 
   const worldStatus = useQuery(api.world.defaultWorldStatus);
@@ -39,10 +42,20 @@ export default function Game() {
   if (!worldId || !engineId || !game) {
     return null;
   }
+  const roster = [...game.world.players.values()]
+    .map((p) => {
+      const d = game.playerDescriptions.get(p.id);
+      return d ? { id: p.id, name: d.name, character: d.character } : undefined;
+    })
+    .filter((e): e is { id: GameId<'players'>; name: string; character: string } => !!e);
+  const selectPlayer = (id: GameId<'players'>) => {
+    setSelectedElement({ kind: 'player', id });
+    setCameraTarget({ id, t: Date.now() });
+  };
   return (
     <>
       {SHOW_DEBUG_UI && <DebugTimeManager timeManager={timeManager} width={200} height={100} />}
-      <div className="mx-auto w-full max-w grid grid-rows-[240px_1fr] lg:grid-rows-[1fr] lg:grid-cols-[1fr_auto] lg:grow max-w-[1400px] min-h-[480px] game-frame">
+      <div className="w-full grow min-h-0 grid grid-rows-[1fr_40vh] lg:grid-rows-[1fr] lg:grid-cols-[1fr_auto] game-frame">
         {/* Game area */}
         <div className="relative overflow-hidden bg-brown-900" ref={gameWrapperRef}>
           <div className="absolute inset-0">
@@ -59,6 +72,7 @@ https://github.com/michalochman/react-pixi-fiber/issues/145#issuecomment-5315492
                     height={height}
                     historicalTime={historicalTime}
                     setSelectedElement={setSelectedElement}
+                    cameraTarget={cameraTarget}
                   />
                 </ConvexProvider>
               </Stage>
@@ -80,6 +94,7 @@ https://github.com/michalochman/react-pixi-fiber/issues/145#issuecomment-5315492
           />
         </div>
       </div>
+      <CharacterRoster players={roster} selectedId={selectedElement?.id} onSelect={selectPlayer} />
     </>
   );
 }
