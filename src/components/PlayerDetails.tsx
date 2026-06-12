@@ -298,8 +298,8 @@ export default function PlayerDetails({
           </h2>
         </div>
       )}
-      <div className="desc my-6">
-        <p className="leading-tight -m-4 bg-brown-700 text-base sm:text-sm">
+      <Section title="📖 Bio" defaultOpen>
+        <p className="bg-brown-700 p-2 text-base leading-tight sm:text-sm">
           {!isMe && playerDescription?.description}
           {isMe && <i>This is you!</i>}
           {!isMe && inConversationWithMe && (
@@ -309,7 +309,7 @@ export default function PlayerDetails({
             </>
           )}
         </p>
-      </div>
+      </Section>
       {!isMe && playerConversation && playerStatus?.kind === 'participating' && (
         <Messages
           worldId={worldId}
@@ -321,10 +321,7 @@ export default function PlayerDetails({
         />
       )}
       {!playerConversation && previousConversation && (
-        <>
-          <div className="box flex-grow">
-            <h2 className="bg-brown-700 text-lg text-center">Previous conversation</h2>
-          </div>
+        <Section title="💬 Previous conversation">
           <Messages
             worldId={worldId}
             engineId={engineId}
@@ -333,7 +330,7 @@ export default function PlayerDetails({
             humanPlayer={humanPlayer}
             scrollViewRef={scrollViewRef}
           />
-        </>
+        </Section>
       )}
       {typeof myPrestige === 'number' && (
         <div className="box flex-grow mt-6">
