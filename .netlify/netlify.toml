@@ -9,11 +9,10 @@ headers = []
 [build]
 publish = "/Users/alexaloste/Desktop/terrarium/dist"
 publishOrigin = "config"
-commandOrigin = "config"
-command = "npx vite build"
+commandOrigin = "ui"
+command = "npm run build"
 
 [build.environment]
-NODE_VERSION = "20"
 
 [build.processing]
 

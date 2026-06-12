@@ -35,7 +35,9 @@ if [ "$MODE" != "--backend-only" ]; then
   echo "▶ Building frontend (bakes in VITE_CONVEX_URL + password)…"
   npx vite build
   echo "▶ Deploying to Netlify…"
-  npx netlify deploy --prod --dir=dist --site "${NETLIFY_SITE_ID:?set NETLIFY_SITE_ID in .env.deploy.local}"
+  # --no-build: we already built locally with the right env. Without it, Netlify auto-detects
+  # the project and runs `npm run build` (which fails on a pre-existing tsc error).
+  npx netlify deploy --prod --dir=dist --no-build --site "${NETLIFY_SITE_ID:?set NETLIFY_SITE_ID in .env.deploy.local}"
 fi
 
 echo "✅ Done."

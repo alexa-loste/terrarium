@@ -7,16 +7,13 @@
 # Two env vars must be available at BUILD time (they get baked into the static bundle):
 #   VITE_CONVEX_URL    — the Convex deployment URL (same one in .env.local)
 #   VITE_APP_PASSWORD  — the password for the gate
-# If you deploy a locally-built dir (netlify deploy --dir=dist), these come from .env.local and
-# you don't need to set them in the Netlify UI. If you connect the repo for CI builds, set them
-# in Site settings → Environment variables.
+# We ALWAYS build locally (so .env.local bakes in the right VITE_CONVEX_URL + password) and
+# deploy the prebuilt dir: `bash scripts/deploy.sh`. There is deliberately NO [build].command
+# here — if Netlify rebuilt in its own cloud it would have no .env.local and bake a wrong/empty
+# Convex URL (that exact bug shipped a blank page once). `netlify deploy --dir=dist` just uploads.
 
 [build]
-  command = "npx vite build"
   publish = "dist"
-
-[build.environment]
-  NODE_VERSION = "20"
 
 # Single-page-app fallback so deep links resolve to index.html.
 [[redirects]]
