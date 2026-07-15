@@ -1,20 +1,23 @@
 import { useState } from 'react';
+import { setRole } from '../hooks/useRole';
 
 // A lightweight password screen in front of the whole app (v1.x — for the hosted build).
 //
-// The expected password is baked in at build time from VITE_APP_PASSWORD. If that env var is
-// unset (e.g. local dev), the gate is bypassed entirely so local work isn't blocked. On a
-// correct entry we remember it in localStorage so you stay in across reloads.
+// Two passwords (v2.2): VITE_APP_PASSWORD unlocks as ADMIN (full control); VITE_VIEWER_PASSWORD
+// unlocks as VIEWER (sees everything, no controls — see useRole.ts). The admin password is baked
+// in at build time; if it's unset (local dev) the gate is bypassed entirely as admin. On a
+// correct entry we remember the role in localStorage so you stay in across reloads.
 //
 // Honest scope: this gates the UI, not the data. The Convex backend is public, so this keeps
 // casual visitors out of the viewer — it is not real data security.
 
-const EXPECTED = import.meta.env.VITE_APP_PASSWORD as string | undefined;
+const ADMIN_PW = import.meta.env.VITE_APP_PASSWORD as string | undefined;
+const VIEWER_PW = import.meta.env.VITE_VIEWER_PASSWORD as string | undefined;
 const STORAGE_KEY = 'terrarium-unlocked';
 
 export default function PasswordGate({ children }: { children: React.ReactNode }) {
   const [unlocked, setUnlocked] = useState(
-    () => !EXPECTED || localStorage.getItem(STORAGE_KEY) === '1',
+    () => !ADMIN_PW || localStorage.getItem(STORAGE_KEY) === '1',
   );
   const [value, setValue] = useState('');
   const [error, setError] = useState(false);
@@ -23,7 +26,12 @@ export default function PasswordGate({ children }: { children: React.ReactNode }
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (value === EXPECTED) {
+    if (value === ADMIN_PW) {
+      setRole('admin');
+      localStorage.setItem(STORAGE_KEY, '1');
+      setUnlocked(true);
+    } else if (VIEWER_PW && value === VIEWER_PW) {
+      setRole('viewer');
       localStorage.setItem(STORAGE_KEY, '1');
       setUnlocked(true);
     } else {

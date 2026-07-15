@@ -1,7 +1,13 @@
 import { v } from 'convex/values';
 import { Id } from '../_generated/dataModel';
 import { ActionCtx, internalQuery } from '../_generated/server';
-import { LLMMessage, chatCompletion } from '../util/llm';
+import {
+  LLMMessage,
+  chatCompletion,
+  looksLikeMeta,
+  stripMetaCommentary,
+  stripNarration,
+} from '../util/llm';
 import * as memory from './memory';
 import { api, internal } from '../_generated/api';
 import * as embeddingsCache from './embeddingsCache';
@@ -9,6 +15,8 @@ import { GameId, conversationId, playerId } from '../aiTown/ids';
 import { NUM_MEMORIES_TO_SEARCH } from '../constants';
 import { nearestPlace } from '../../data/places';
 import { timeOfDayPrompt, WorldTime } from '../../data/clock';
+import { planWhenLabel } from '../../data/plans';
+import { moodPromptLine } from '../../data/mood';
 
 const selfInternal = internal.agent.conversation;
 
@@ -45,35 +53,54 @@ export async function startConversationMessage(
   );
   const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, { worldId });
   const beliefs = await ctx.runQuery(internal.beliefs.forContext, { worldId, playerId });
+  const plans = await ctx.runQuery(internal.plans.upcomingForPlayer, {
+    worldId,
+    playerId,
+    currentDay: time.day,
+  });
+  const innerState = await loadInnerState(ctx, worldId, playerId, time.day);
+  const heard = await ctx.runQuery(internal.gossip.heardAbout, {
+    worldId,
+    listenerPlayerId: playerId,
+    subjectPlayerId: otherPlayerId,
+  });
+  const edge = await ctx.runQuery(internal.relationships.edgeFor, {
+    worldId,
+    fromPlayerId: playerId,
+    toPlayerId: otherPlayerId,
+  });
   const prompt = [
     `You are ${player.name}, and you just started a conversation with ${otherPlayer.name}.`,
     timeOfDayPrompt(time),
   ];
   if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
+  prompt.push(...relationshipPrompt(otherPlayer.name, edge));
   prompt.push(...beliefsPrompt(beliefs));
+  prompt.push(...innerStatePrompt(innerState.vit, innerState.goals, innerState.drives, time.day));
+  prompt.push(...factionPrompt(innerState.faction));
+  prompt.push(...civicPrompt(innerState.civic));
+  prompt.push(...reciprocityPrompt(innerState.ledger, otherPlayer.name));
+  prompt.push(...gossipHintPrompt(heard, otherPlayer.name));
+  prompt.push(...plansPrompt(plans, time.day, player.name));
   prompt.push(...previousConversationPrompt(otherPlayer, lastConversation));
   prompt.push(...relatedMemoriesPrompt(memories));
   prompt.push(...dialogueStyle(player.name, otherPlayer.name));
   if (memoryWithOtherPlayer) {
     prompt.push(
-      `Be sure to include some detail or question about a previous conversation in your greeting.`,
+      `You and ${otherPlayer.name} have talked before. Do NOT recap, rehash, or reminisce about ` +
+        `those past chats — open with something new: a fresh thought, a reaction to what's ` +
+        `happening right now, or a question you haven't asked them yet.`,
     );
   }
   const lastPrompt = `${player.name} to ${otherPlayer.name}:`;
   prompt.push(lastPrompt);
 
-  const { content } = await chatCompletion({
-    messages: [
-      {
-        role: 'system',
-        content: prompt.join('\n'),
-      },
-    ],
-    max_tokens: 300,
-    stop: stopWords(otherPlayer.name, player.name),
-  });
-  return trimContentPrefx(content, lastPrompt);
+  return completeDialogue(
+    [{ role: 'system', content: prompt.join('\n') }],
+    lastPrompt,
+    stopWords(otherPlayer.name, player.name),
+  );
 }
 
 function trimContentPrefx(content: string, prompt: string) {
@@ -83,8 +110,44 @@ function trimContentPrefx(content: string, prompt: string) {
   }
   // Strip leaked meta prefixes the small local model sometimes emits, e.g.
   // "Naomi's response would be: ..." or "Theo would say: ...".
-  c = c.replace(/^\s*[A-Z][a-z]+(?:'s)?\s+(?:response would be|would say|says|replies?)\s*:?\s*/i, '');
+  c = c.replace(
+    /^\s*[A-Z][a-z]+(?:'s)?\s+(?:response would be|would say|says|replies?)\s*:?\s*/i,
+    '',
+  );
+  // And the heavier leak where it narrates the task ("Task Summary: …") instead of speaking.
+  c = stripMetaCommentary(c);
+  // And the novelization leak where it quotes its own speech + adds prose stage-directions
+  // ('"…," I concede, my gaze skeptical. "…"') instead of just speaking.
+  c = stripNarration(c);
   return c.trim();
+}
+
+// The small local model occasionally breaks character and describes the task instead of speaking
+// the line (the "Task Summary: … Guidelines Met in Response: …" leak). Generate, and if what comes
+// back is task-narration (or empty after stripping), re-ask ONCE with a sterner corrective before
+// falling back to the stripped text. Keeps narration out of the transcript.
+async function completeDialogue(
+  messages: LLMMessage[],
+  lastPrompt: string,
+  stop: string[],
+): Promise<string> {
+  const { content } = await chatCompletion({ messages, max_tokens: 300, stop });
+  if (!looksLikeMeta(content)) return trimContentPrefx(content, lastPrompt);
+  const retryMessages: LLMMessage[] = [
+    ...messages,
+    {
+      role: 'system',
+      content:
+        'You broke character and described the task instead of speaking. Do NOT write any ' +
+        'summary, preamble, label, or meta-commentary. Reply with ONLY the single line of ' +
+        'dialogue, in the first person, and nothing else.',
+    },
+    { role: 'user', content: lastPrompt },
+  ];
+  const retry = await chatCompletion({ messages: retryMessages, max_tokens: 240, stop });
+  // Use whichever attempt yields real in-character text; trimContentPrefx strips any residue.
+  const cleaned = trimContentPrefx(retry.content, lastPrompt);
+  return cleaned || trimContentPrefx(content, lastPrompt);
 }
 
 export async function continueConversationMessage(
@@ -110,13 +173,36 @@ export async function continueConversationMessage(
   const memories = await memory.searchMemories(ctx, player.id as GameId<'players'>, embedding, 3);
   const time: WorldTime = await ctx.runQuery(internal.clock.currentTime, { worldId });
   const beliefs = await ctx.runQuery(internal.beliefs.forContext, { worldId, playerId });
+  const plans = await ctx.runQuery(internal.plans.upcomingForPlayer, {
+    worldId,
+    playerId,
+    currentDay: time.day,
+  });
+  const innerState = await loadInnerState(ctx, worldId, playerId, time.day);
+  const heard = await ctx.runQuery(internal.gossip.heardAbout, {
+    worldId,
+    listenerPlayerId: playerId,
+    subjectPlayerId: otherPlayerId,
+  });
+  const edge = await ctx.runQuery(internal.relationships.edgeFor, {
+    worldId,
+    fromPlayerId: playerId,
+    toPlayerId: otherPlayerId,
+  });
   const prompt = [
     `You are ${player.name}, and you're currently in a conversation with ${otherPlayer.name}.`,
     timeOfDayPrompt(time),
   ];
   if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
+  prompt.push(...relationshipPrompt(otherPlayer.name, edge));
   prompt.push(...beliefsPrompt(beliefs));
+  prompt.push(...innerStatePrompt(innerState.vit, innerState.goals, innerState.drives, time.day));
+  prompt.push(...factionPrompt(innerState.faction));
+  prompt.push(...civicPrompt(innerState.civic));
+  prompt.push(...reciprocityPrompt(innerState.ledger, otherPlayer.name));
+  prompt.push(...gossipHintPrompt(heard, otherPlayer.name));
+  prompt.push(...plansPrompt(plans, time.day, player.name));
   prompt.push(...relatedMemoriesPrompt(memories));
   prompt.push(
     `Below is the current chat history between you and ${otherPlayer.name}.`,
@@ -140,12 +226,7 @@ export async function continueConversationMessage(
   const lastPrompt = `${player.name} to ${otherPlayer.name}:`;
   llmMessages.push({ role: 'user', content: lastPrompt });
 
-  const { content } = await chatCompletion({
-    messages: llmMessages,
-    max_tokens: 300,
-    stop: stopWords(otherPlayer.name, player.name),
-  });
-  return trimContentPrefx(content, lastPrompt);
+  return completeDialogue(llmMessages, lastPrompt, stopWords(otherPlayer.name, player.name));
 }
 
 export async function leaveConversationMessage(
@@ -190,12 +271,7 @@ export async function leaveConversationMessage(
   const lastPrompt = `${player.name} to ${otherPlayer.name}:`;
   llmMessages.push({ role: 'user', content: lastPrompt });
 
-  const { content } = await chatCompletion({
-    messages: llmMessages,
-    max_tokens: 300,
-    stop: stopWords(otherPlayer.name, player.name),
-  });
-  return trimContentPrefx(content, lastPrompt);
+  return completeDialogue(llmMessages, lastPrompt, stopWords(otherPlayer.name, player.name));
 }
 
 function agentPrompts(
@@ -225,10 +301,181 @@ function beliefsPrompt(beliefs: { statement: string; conviction: number }[] | nu
   ];
 }
 
+// v2.8 — how the speaker actually FEELS about the person in front of them, in plain language. This
+// was the real gap: they talked to everyone blind to their own affinity/respect/trust. We just
+// state the feeling and let the model carry it — no tone-scripting.
+function relationshipPrompt(
+  otherName: string,
+  edge: { affinity: number; respect: number; trust: number } | null,
+): string[] {
+  if (!edge) return [];
+  const clauses: string[] = [];
+  if (edge.affinity >= 70) clauses.push(`you genuinely like them`);
+  else if (edge.affinity >= 57) clauses.push(`you're warm toward them`);
+  else if (edge.affinity <= 30) clauses.push(`there's real friction between you`);
+  else if (edge.affinity <= 43) clauses.push(`you're a bit cool toward them`);
+  if (edge.respect <= 33) clauses.push(`you don't much respect how they carry themselves`);
+  else if (edge.respect >= 72) clauses.push(`you respect them`);
+  if (edge.trust <= 33) clauses.push(`you don't fully trust them`);
+  if (!clauses.length) return [];
+  return [`How you feel about ${otherName}: ${clauses.join('; ')}.`];
+}
+
+// v2.0 — put any gatherings coming up soon in front of the speaker, so they bring them up,
+// coordinate the details, or remember to show up. These are SHARED rows both people see, which
+// is what keeps the two sides of a plan on the same page.
+function plansPrompt(
+  plans:
+    | { title: string; day: number; hour?: number; placeName?: string; attendees: string[] }[]
+    | null,
+  currentDay: number,
+  selfName: string,
+): string[] {
+  if (!plans || !plans.length) return [];
+  const lines = plans.map((p) => {
+    const when = planWhenLabel(p.day, currentDay, p.hour);
+    const where = p.placeName ? ` at ${p.placeName}` : '';
+    const others = p.attendees.filter((n) => n !== selfName);
+    const withWho = others.length ? ` with ${others.join(' and ')}` : '';
+    return `- ${p.title}${where}, ${when}${withWho}`;
+  });
+  return [
+    `Plans you've already made (these are real commitments — bring them up, sort out details, ` +
+      `or look forward to them):\n${lines.join('\n')}`,
+  ];
+}
+
+// Fetch the three inner-state pieces (mood vitals, goal ladder, top drives) in one place.
+async function loadInnerState(
+  ctx: ActionCtx,
+  worldId: Id<'worlds'>,
+  playerId: GameId<'players'>,
+  currentDay: number,
+) {
+  const vit = await ctx.runQuery(internal.agentVitals.getVitals, { worldId, playerId });
+  const goals = await ctx.runQuery(internal.goals.activeForPlayer, {
+    worldId,
+    playerId,
+    currentDay,
+  });
+  const drives = await ctx.runQuery(internal.drives.topForPlayer, { worldId, playerId });
+  const faction = await ctx.runQuery(internal.factions.forPlayer, { worldId, playerId });
+  const civic = await ctx.runQuery(internal.civics.issueForPlayer, { worldId, playerId });
+  const ledger = await ctx.runQuery(internal.reciprocity.ledgerForPlayer, { worldId, playerId });
+  return { vit, goals, drives, faction, civic, ledger };
+}
+
+// v2.7 — money between you and the person in front of you: a debt you owe them (a little awkward) or
+// one they owe you (quietly on your mind). Only surfaces the tie to THIS other person.
+function reciprocityPrompt(
+  ledger: { owe: { name: string; amount: number }[]; owed: { name: string; amount: number }[] } | null,
+  otherName: string,
+): string[] {
+  if (!ledger) return [];
+  const iOwe = ledger.owe.find((o) => o.name === otherName);
+  const theyOwe = ledger.owed.find((o) => o.name === otherName);
+  const out: string[] = [];
+  if (iOwe) out.push(`You still owe ${otherName} ${iOwe.amount} — it's a little awkward, in the back of your mind.`);
+  if (theyOwe) out.push(`${otherName} still owes you ${theyOwe.amount}; you haven't pressed it, but you know.`);
+  return out;
+}
+
+// v2.6 — the live town vote, if one's running, and where this character stands. Makes the civic
+// stakes show up in how they talk while a campaign is on.
+function civicPrompt(
+  civic: { title: string; text: string; myStanceLabel: string } | null,
+): string[] {
+  if (!civic) return [];
+  return [
+    `The town is deciding: ${civic.title} — ${civic.text} You are ${civic.myStanceLabel}; if it ` +
+      `comes up, speak from where you stand.`,
+  ];
+}
+
+// v2.3 — the character's allegiance, so the fault lines show up in how they argue. Their faction
+// and where it stands, who they stand with, and the rival across the line. The guardrail wording
+// keeps this from turning into scripted hostility — a difference in view, not an order to attack.
+function factionPrompt(
+  faction: {
+    name: string;
+    premise: string;
+    poleLabel: string;
+    members: string[];
+    rival: { name: string; premise: string } | null;
+    drawnToward: string[];
+  } | null,
+): string[] {
+  if (!faction) return [];
+  const out: string[] = [];
+  let line = `You stand with ${faction.name} — ${faction.premise} (you're on the side of ${faction.poleLabel}).`;
+  if (faction.members.length) line += ` Others in it: ${faction.members.slice(0, 4).join(', ')}.`;
+  out.push(line);
+  if (faction.rival) {
+    out.push(
+      `Across the line is ${faction.rival.name}, who believe ${faction.rival.premise}. You see it ` +
+        `differently and it shows when it comes up — but argue the substance, don't just be hostile.`,
+    );
+  }
+  if (faction.drawnToward.length) {
+    out.push(`You're also drawn to ${faction.drawnToward.slice(0, 2).join(' and ')}.`);
+  }
+  return out;
+}
+
+// v2.4 — secondhand impression: the latest thing you've heard about the person in front of you, from
+// someone else. It colors your guard, but you still judge them on how they actually show up.
+function gossipHintPrompt(
+  heard: { speakerName: string; line: string; valence: number } | null,
+  otherName: string,
+): string[] {
+  if (!heard) return [];
+  return [
+    `Something colors how you see ${otherName}: ${heard.speakerName} told you, about them, "${heard.line}" ` +
+      `You haven't forgotten it — but judge ${otherName} on how they actually are with you now.`,
+  ];
+}
+
+// v2.1 — the speaker's inner state: what drives them, what they're working toward (long-term +
+// the live milestones with deadlines), and the mood that's rolled up from their needs, goal
+// progress, and standing. This is what makes the stakes show up in how they talk — a stressed
+// character behind on a goal carries themselves differently than one whose work is clicking.
+function innerStatePrompt(
+  vit: { stress?: number; momentum?: number } | null,
+  goals: { long: { text: string } | null; shorts: { text: string; daysLeft: number }[] } | null,
+  drives: { label: string }[] | null,
+  _currentDay: number,
+): string[] {
+  const out: string[] = [];
+  if (drives && drives.length) {
+    out.push(
+      `What drives you, underneath it all: ${drives
+        .slice(0, 2)
+        .map((d) => d.label)
+        .join('; ')}.`,
+    );
+  }
+  if (goals?.long) {
+    const shorts = (goals.shorts ?? [])
+      .slice(0, 2)
+      .map((s) => `${s.text} (${s.daysLeft <= 0 ? 'overdue' : `${s.daysLeft}d left`})`);
+    out.push(
+      `What you're working toward: ${goals.long.text}` +
+        (shorts.length ? ` Right now you're pushing on: ${shorts.join('; ')}.` : ''),
+    );
+  }
+  if (vit) {
+    const line = moodPromptLine(vit.stress ?? 25, vit.momentum ?? 50);
+    if (line) out.push(line);
+  }
+  return out;
+}
+
 // Keep the (small, local) model from writing the other person's lines or stage directions.
 function dialogueStyle(playerName: string, otherName: string): string[] {
   return [
     `Reply with ONE short line of dialogue spoken by ${playerName}, in the first person.`,
+    `Don't repeat a point you or ${otherName} has already made in this chat — add something new. ` +
+      `If the exchange has run its course, say a natural closing line instead of restating it.`,
     `Do NOT write ${otherName}'s reply. Do NOT narrate actions or use stage directions or` +
       ` parentheticals like "(skeptical)" or "(starts typing)". Just say the line out loud.`,
   ];

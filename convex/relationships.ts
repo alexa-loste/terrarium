@@ -1,6 +1,7 @@
 import { v } from 'convex/values';
-import { internalMutation, query } from './_generated/server';
+import { internalMutation, internalQuery, query } from './_generated/server';
 import { playerId } from './aiTown/ids';
+import { CHARGED_TOPICS, priorPole } from '../data/factions';
 
 // Terrarium v1.5 — the relationship graph + reputation. Directed edges (how `from` feels about
 // `to`) are nudged whenever a conversation ends; reputation is derived from inbound edges.
@@ -95,11 +96,21 @@ export const applyConversationOutcome = internalMutation({
     await bumpSocial(ctx, args.worldId, args.bPlayerId, socialDelta);
 
     // Chronicle a relationship shift on a threshold crossing (using the a->b edge to fire once).
+    // The label is respect-aware so it can't contradict the conversation gist: warmth and respect
+    // move independently (a respectful disagreement cools warmth while raising respect), so a bald
+    // "Things cooled" alongside a "grew in mutual respect" gist reads as a contradiction even though
+    // both are true. Fold the respect direction into the headline.
     let summary: string | null = null;
     if (ab.affinityBefore < CLOSE_THRESHOLD && ab.affinityAfter >= CLOSE_THRESHOLD) {
-      summary = `${args.aName} and ${args.bName} grew close.`;
+      summary =
+        args.respect < 0
+          ? `${args.aName} and ${args.bName} grew closer, even as some respect frayed.`
+          : `${args.aName} and ${args.bName} grew close.`;
     } else if (ab.affinityBefore >= DISTANT_THRESHOLD && ab.affinityAfter < DISTANT_THRESHOLD) {
-      summary = `Things cooled between ${args.aName} and ${args.bName}.`;
+      summary =
+        args.respect > 0
+          ? `${args.aName} and ${args.bName} drifted a little cooler — but with more respect for each other.`
+          : `Things cooled between ${args.aName} and ${args.bName}.`;
     }
     if (summary) {
       await ctx.db.insert('townEvents', {
@@ -175,6 +186,81 @@ export const nudgeDirected = internalMutation({
         summary,
       });
     }
+  },
+});
+
+// v2.8 — how THIS speaker feels about the person in front of them, for the dialogue prompt. Without
+// this the agent talks to everyone blind to its own affinity/respect/trust → uniform niceness.
+export const edgeFor = internalQuery({
+  args: { worldId: v.id('worlds'), fromPlayerId: playerId, toPlayerId: playerId },
+  handler: async (ctx, args) => {
+    const e = await ctx.db
+      .query('relationships')
+      .withIndex('edge', (q: any) =>
+        q
+          .eq('worldId', args.worldId)
+          .eq('fromPlayerId', args.fromPlayerId)
+          .eq('toPlayerId', args.toPlayerId),
+      )
+      .first();
+    if (!e) return null;
+    return { familiarity: e.familiarity, affinity: e.affinity, respect: e.respect, trust: e.trust };
+  },
+});
+
+// v2.8 (Tier B) — seed the social graph from BELIEF DISTANCE so the town doesn't start (or, run on a
+// live world, RESET to) uniform neutral-warm. For each ordered pair we score agreement across the
+// charged fault lines (same pole = +1, opposite = -1) and offset the opening edge: people who clash
+// on convictions start cool, people who align start warm. Affinity moves most (you like people who
+// see the world like you); respect/trust move less (you can respect someone you disagree with). Kept
+// in a civil band — real friction, not enemies. OVERWRITES existing edges, so it's a deliberate
+// reset of the relationship graph; run it once when you want to re-establish realistic starting
+// friction. Familiarity is seeded modestly (they already know each other in this small town).
+export const seedBeliefBasedRelationships = internalMutation({
+  args: { worldId: v.id('worlds') },
+  handler: async (ctx, args) => {
+    const cast = await ctx.db
+      .query('playerDescriptions')
+      .withIndex('worldId', (q: any) => q.eq('worldId', args.worldId))
+      .collect();
+    const now = Date.now();
+    let seeded = 0;
+    for (const a of cast) {
+      for (const b of cast) {
+        if (a.playerId === b.playerId) continue;
+        // Net alignment over the topics they BOTH hold a position on.
+        let net = 0;
+        for (const t of CHARGED_TOPICS) {
+          const pa = priorPole(a.name, t);
+          const pb = priorPole(b.name, t);
+          if (pa == null || pb == null) continue;
+          net += pa === pb ? 1 : -1;
+        }
+        const affinity = clamp(NEUTRAL + net * 7); // ±7 per topic → 3-topic clash ≈ 29, full align ≈ 71
+        const respect = clamp(NEUTRAL + net * 3); // you can respect an opponent — smaller swing
+        const trust = clamp(NEUTRAL + net * 3);
+        const existing = await ctx.db
+          .query('relationships')
+          .withIndex('edge', (q: any) =>
+            q
+              .eq('worldId', args.worldId)
+              .eq('fromPlayerId', a.playerId)
+              .eq('toPlayerId', b.playerId),
+          )
+          .first();
+        const next = { familiarity: 25, affinity, respect, trust, romantic: 0, updatedAt: now };
+        if (existing) await ctx.db.patch(existing._id, next);
+        else
+          await ctx.db.insert('relationships', {
+            worldId: args.worldId,
+            fromPlayerId: a.playerId,
+            toPlayerId: b.playerId,
+            ...next,
+          });
+        seeded++;
+      }
+    }
+    return { seeded };
   },
 });
 

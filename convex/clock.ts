@@ -82,6 +82,43 @@ export async function unfreezeClock(ctx: any, worldId: string): Promise<void> {
   await ctx.db.patch(row._id, { epochRealMs: Date.now(), frozen: false });
 }
 
+// v2.10 — NIGHT FAST-FORWARD. When every agent is asleep, no decisions happen — it's dead
+// sim-time. So auto-jump to NIGHT_SPEED to skim through the night, and snap back to DAY_SPEED the
+// instant anyone wakes. Called from agentVitals.setVitals (the chokepoint for every sleep/wake
+// write), so it reconciles with zero lag on fresh state — no polling cron, no overshoot into the
+// morning. Re-anchors like setSpeed so the displayed clock never jumps. Leaves a frozen world
+// alone (freeze overrides speed) and no-ops when speed already matches.
+// NIGHT_SPEED must stay low enough that one asleep re-decide tick (~SLEEP_DURATION=60s real) can't
+// leap the whole night. Engine ticks fire on a FIXED real cadence regardless of clock speed (the
+// clock is derived-on-read, hot path untouched), so at speed S one sleep tick ≈ S world-hours. The
+// night window is 8 world-hours; at 8x a single tick jumps the entire night, so agents skip their
+// night-phase tick → miss the overnight consolidation + energy recharge + belief drift, and the
+// all-asleep state can't sustain (it instantly races to a wake). 4x ≈ 4h/tick → the night is sampled
+// ~twice, consolidation fires, and it's still a real speedup. Don't raise without shortening the
+// sleep re-decide cadence to match (which costs many more DB writes — bad under the Starter limit).
+const NIGHT_SPEED = 4; // fast-forward the all-asleep night (capped so it can't skip the night)
+const DAY_SPEED = 1; // normal speed whenever anyone is awake
+
+export async function reconcileNightSpeed(ctx: any, worldId: string): Promise<void> {
+  const clockRow = await ctx.db
+    .query('worldClock')
+    .withIndex('worldId', (q: any) => q.eq('worldId', worldId))
+    .first();
+  if (!clockRow || clockRow.frozen) return;
+  const vitals = await ctx.db
+    .query('agentVitals')
+    .withIndex('playerId', (q: any) => q.eq('worldId', worldId))
+    .collect();
+  if (!vitals.length) return;
+  const allAsleep = vitals.every((v: any) => v.asleep);
+  const desired = allAsleep ? NIGHT_SPEED : DAY_SPEED;
+  if (clockRow.speed === desired) return;
+  // Re-anchor at the current world position so the displayed time is continuous, then switch.
+  const now = Date.now();
+  const epochWorldMs = clockRow.epochWorldMs + (now - clockRow.epochRealMs) * clockRow.speed;
+  await ctx.db.patch(clockRow._id, { epochRealMs: now, epochWorldMs, speed: desired });
+}
+
 // Current clock + the world time it implies right now. Read by the frontend and by agents.
 export const getClock = query({
   args: { worldId: v.id('worlds') },

@@ -35,6 +35,13 @@ const TablesToVacuum: TableNames[] = [
   // We can vacuum fewer tables without serious consequences, but the only
   // one that will cause issues over time is having >>100k vectors.
   'memoryEmbeddings',
+
+  // v2.8 — append-only DISPLAY logs that grow unbounded and nothing reads past ~2 weeks (the
+  // chronicle, the gossip ticker, the feed). Their downstream effects (relationship nudges,
+  // reactions) all fire at write time, so trimming old rows is purely a storage win.
+  'townEvents',
+  'gossipEvents',
+  'feedPosts',
 ];
 
 export const vacuumOldEntries = internalMutation({

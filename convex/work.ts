@@ -9,6 +9,7 @@ import {
   MISSED_DELIVERABLE_STANDING,
   STANDING_RECOVERY_PER_DAY,
 } from '../data/work';
+import { dailySavingsFor } from '../data/economy';
 
 // v1.9 — work obligation state + the daily evaluation that applies the stakes.
 
@@ -104,13 +105,18 @@ export const evaluate = internalMutation({
     patch.standingPenalty = Math.max(0, ws.standingPenalty + standingAdd - STANDING_RECOVERY_PER_DAY);
     await ctx.db.patch(ws._id, patch);
 
-    // Apply the money hit to their wallet.
-    if (moneyPenalty > 0) {
+    // Settle the day's wallet: credit reliable net savings (the tiered wealth engine that makes the
+    // income gap actually propagate — independent of tick-level attendance noise), minus any miss
+    // penalty. Runs exactly once per day (the lastEvalDay guard above). Skipping a shift still bites
+    // via moneyPenalty, but your career income still lands.
+    const dailySavings = dailySavingsFor(args.playerName);
+    const netDelta = dailySavings - moneyPenalty;
+    if (netDelta !== 0) {
       const vit = await ctx.db
         .query('agentVitals')
         .withIndex('playerId', (q: any) => q.eq('worldId', args.worldId).eq('playerId', args.playerId))
         .first();
-      if (vit) await ctx.db.patch(vit._id, { money: Math.max(0, (vit.money ?? 0) - moneyPenalty) });
+      if (vit) await ctx.db.patch(vit._id, { money: Math.max(0, (vit.money ?? 0) + netDelta) });
     }
     return { behind, message };
   },

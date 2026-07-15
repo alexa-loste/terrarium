@@ -1,7 +1,10 @@
 export const ACTION_TIMEOUT = 120_000; // more time for local dev
 // export const ACTION_TIMEOUT = 60_000;// normally fine
 
-export const IDLE_WORLD_TIMEOUT = 5 * 60 * 1000;
+// v2.8 — tightened 5min → 2min to curb Convex usage: the world (engine steps + agent LLM calls,
+// the dominant cost) freezes 2min after the last viewer leaves instead of 5. It restarts instantly
+// on the next heartbeat (page load), so the only cost is a slightly longer "warming up" on return.
+export const IDLE_WORLD_TIMEOUT = 2 * 60 * 1000;
 export const WORLD_HEARTBEAT_INTERVAL = 60 * 1000;
 
 export const MAX_STEP = 10 * 60 * 1000;

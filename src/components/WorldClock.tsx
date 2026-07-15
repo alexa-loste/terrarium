@@ -10,6 +10,7 @@ import {
   phaseEmoji,
   worldTime,
 } from '../../data/clock';
+import { useIsAdmin } from '../hooks/useRole';
 
 // v1.3 — the on-screen day/night clock + speed toggle, plus a night tint over the map.
 // The clock is derived from an anchor (see data/clock.ts), so we fetch the anchor once and
@@ -18,6 +19,10 @@ import {
 export default function WorldClock({ worldId }: { worldId: Id<'worlds'> }) {
   const clock = useQuery(api.clock.getClock, { worldId });
   const setSpeed = useMutation(api.clock.setSpeed);
+  const isAdmin = useIsAdmin();
+  // The engine is stopped whenever the world isn't 'running' (developer-frozen OR idle-stopped).
+  const worldStatus = useQuery(api.world.defaultWorldStatus);
+  const engineStopped = !!worldStatus && worldStatus.status !== 'running';
 
   // Skew between server and browser clocks, captured when the anchor arrives.
   const [skew, setSkew] = useState(0);
@@ -33,7 +38,9 @@ export default function WorldClock({ worldId }: { worldId: Id<'worlds'> }) {
   }, []);
 
   if (!clock) return null;
-  const frozen = !!clock.frozen;
+  // Show "paused" when the clock is frozen OR the engine is idle-stopped — in both cases the
+  // agents aren't acting, so the badge should read paused and hold the time still (v2.2).
+  const frozen = !!clock.frozen || engineStopped;
   const anchor: ClockAnchor = {
     epochRealMs: clock.epochRealMs,
     epochWorldMs: clock.epochWorldMs,
@@ -58,24 +65,29 @@ export default function WorldClock({ worldId }: { worldId: Id<'worlds'> }) {
       >
         <span className="text-lg leading-none">{frozen ? '⏸' : phaseEmoji(t.phase)}</span>
         <span className="font-display text-sm tracking-wide tabular-nums">{clockLabel(t)}</span>
-        <span className="mx-1 h-4 w-px bg-brown-900/60" />
-        <div className="flex items-center gap-1">
-          {SPEED_OPTIONS.map((s) => (
-            <button
-              key={s}
-              onClick={() => void setSpeed({ worldId, speed: s })}
-              title={`${s}× world time`}
-              className={
-                'rounded px-1.5 py-0.5 text-xs font-bold leading-none transition-colors ' +
-                (clock.speed === s
-                  ? 'bg-white text-clay-700'
-                  : 'bg-brown-900/40 text-white hover:bg-brown-900/70')
-              }
-            >
-              {s}×
-            </button>
-          ))}
-        </div>
+        {/* v2.2 — only the admin gets the speed toggle; viewers see a read-only clock. */}
+        {isAdmin && (
+          <>
+            <span className="mx-1 h-4 w-px bg-brown-900/60" />
+            <div className="flex items-center gap-1">
+              {SPEED_OPTIONS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => void setSpeed({ worldId, speed: s })}
+                  title={`${s}× world time`}
+                  className={
+                    'rounded px-1.5 py-0.5 text-xs font-bold leading-none transition-colors ' +
+                    (clock.speed === s
+                      ? 'bg-white text-clay-700'
+                      : 'bg-brown-900/40 text-white hover:bg-brown-900/70')
+                  }
+                >
+                  {s}×
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </>
   );

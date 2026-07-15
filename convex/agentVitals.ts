@@ -1,7 +1,8 @@
 import { v } from 'convex/values';
-import { internalMutation, internalQuery, query } from './_generated/server';
+import { internalMutation, internalQuery, mutation, query } from './_generated/server';
 import { playerId } from './aiTown/ids';
-import { MAX_FOOD, STARTING_MONEY } from '../data/economy';
+import { MAX_FOOD, STARTING_MONEY, realisticWealthFor } from '../data/economy';
+import { reconcileNightSpeed } from './clock';
 
 // Terrarium v1.3/v1.4 — per-agent vitals + economy. Energy drains while awake and recharges
 // by sleeping (with one overnight consolidation). Food drains while awake and refills by
@@ -9,6 +10,33 @@ import { MAX_FOOD, STARTING_MONEY } from '../data/economy';
 
 export const MAX_ENERGY = 100;
 export const START_SOCIAL = 60;
+export const START_LEISURE = 60; // v2.1 — fun / rest need
+export const START_STRESS = 25; // v2.1 — derived weather, seeded calm-ish
+export const START_MOMENTUM = 50; // v2.1 — 50 = neutral orientation
+
+// v2.5 — re-seed everyone's liquid savings to a realistic, career-tiered net worth (data/economy.ts
+// REALISTIC_WEALTH). One-off: run once to reset the noisy wealth picture; from then on the daily
+// settlement keeps the disparity propagating. Creates a vitals row if one is somehow missing.
+export const seedRealisticWealth = mutation({
+  args: { worldId: v.id('worlds') },
+  handler: async (ctx, args) => {
+    const descriptions = await ctx.db
+      .query('playerDescriptions')
+      .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
+      .collect();
+    const out: { name: string; money: number }[] = [];
+    for (const d of descriptions) {
+      const money = realisticWealthFor(d.name);
+      const vit = await ctx.db
+        .query('agentVitals')
+        .withIndex('playerId', (q) => q.eq('worldId', args.worldId).eq('playerId', d.playerId))
+        .first();
+      if (vit) await ctx.db.patch(vit._id, { money });
+      out.push({ name: d.name, money });
+    }
+    return out.sort((a, b) => b.money - a.money);
+  },
+});
 
 export const getVitals = internalQuery({
   args: { worldId: v.id('worlds'), playerId },
@@ -30,6 +58,9 @@ export const setVitals = internalMutation({
     food: v.optional(v.number()),
     money: v.optional(v.number()),
     social: v.optional(v.number()),
+    leisure: v.optional(v.number()),
+    stress: v.optional(v.number()),
+    momentum: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { worldId, playerId: pid, ...patch } = args;
@@ -49,7 +80,16 @@ export const setVitals = internalMutation({
         food: patch.food ?? MAX_FOOD,
         money: patch.money ?? STARTING_MONEY,
         social: patch.social ?? START_SOCIAL,
+        leisure: patch.leisure ?? START_LEISURE,
+        stress: patch.stress ?? START_STRESS,
+        momentum: patch.momentum ?? START_MOMENTUM,
       });
+    }
+    // v2.10 — when this write flips a sleep/wake state, reconcile the night fast-forward (8x while
+    // all asleep, 1x the moment anyone is up). Only on asleep-touching writes, so normal vitals
+    // patches stay cheap.
+    if (patch.asleep !== undefined) {
+      await reconcileNightSpeed(ctx, worldId);
     }
   },
 });
@@ -64,7 +104,9 @@ export const addMoney = internalMutation({
       .withIndex('playerId', (q) => q.eq('worldId', args.worldId).eq('playerId', args.playerId))
       .first();
     if (existing) {
-      await ctx.db.patch(existing._id, { money: Math.max(0, (existing.money ?? STARTING_MONEY) + args.amount) });
+      await ctx.db.patch(existing._id, {
+        money: Math.max(0, (existing.money ?? STARTING_MONEY) + args.amount),
+      });
     } else {
       await ctx.db.insert('agentVitals', {
         worldId: args.worldId,
@@ -95,6 +137,9 @@ export const listVitals = query({
       food: r.food ?? MAX_FOOD,
       money: r.money ?? STARTING_MONEY,
       social: r.social ?? START_SOCIAL,
+      leisure: r.leisure ?? START_LEISURE,
+      stress: r.stress ?? START_STRESS,
+      momentum: r.momentum ?? START_MOMENTUM,
     }));
   },
 });

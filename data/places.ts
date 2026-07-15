@@ -138,6 +138,24 @@ export function workFor(character: string): Place | undefined {
   return id ? Places.find((p) => p.id === id) : undefined;
 }
 
+// Resolve a gathering's stored venue name back to its place (so attendees can walk to it). v2.8.
+export function placeByName(name?: string): Place | undefined {
+  if (!name) return undefined;
+  return Places.find((p) => p.name === name);
+}
+
+// True if a position is within a place's footprint (the same test atWorkplace uses). v2.8.
+export function atPlace(place: Place | undefined, pos?: { x: number; y: number }): boolean {
+  if (!place || !pos) return false;
+  return Math.hypot(place.x - pos.x, place.y - pos.y) <= place.radius + 0.5;
+}
+
+// True if a character is home (for sleep-at-home: full rest only in your own bed). v2.8.
+export function atHome(character: string | null, pos?: { x: number; y: number }): boolean {
+  if (!character) return false;
+  return atPlace(homeFor(character), pos);
+}
+
 // The named place a tile is "at", or undefined if out in the open. Closest within radius wins.
 export function nearestPlace(x: number, y: number): Place | undefined {
   let best: Place | undefined;

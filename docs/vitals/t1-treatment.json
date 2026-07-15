@@ -1,0 +1,230 @@
+{
+  "beliefLandscape": {
+    "byTopic": [
+      {
+        "meanConviction": 79.7,
+        "n": 7,
+        "topic": "automation"
+      },
+      {
+        "meanConviction": 100,
+        "n": 2,
+        "topic": "regulation"
+      },
+      {
+        "meanConviction": 76.5,
+        "n": 2,
+        "topic": "AI safety"
+      },
+      {
+        "meanConviction": 60,
+        "n": 2,
+        "topic": "AI Ethics"
+      },
+      {
+        "meanConviction": 100,
+        "n": 2,
+        "topic": "labor"
+      },
+      {
+        "meanConviction": 91,
+        "n": 1,
+        "topic": "power"
+      },
+      {
+        "meanConviction": 79,
+        "n": 1,
+        "topic": "AI"
+      },
+      {
+        "meanConviction": 60,
+        "n": 1,
+        "topic": "Tech Oversight"
+      },
+      {
+        "meanConviction": 97,
+        "n": 1,
+        "topic": "community"
+      },
+      {
+        "meanConviction": 60,
+        "n": 1,
+        "topic": "RURAL ACCESS"
+      },
+      {
+        "meanConviction": 85,
+        "n": 1,
+        "topic": "AI in medicine"
+      },
+      {
+        "meanConviction": 69,
+        "n": 1,
+        "topic": "hype"
+      },
+      {
+        "meanConviction": 72,
+        "n": 1,
+        "topic": "open release"
+      },
+      {
+        "meanConviction": 100,
+        "n": 1,
+        "topic": "AI art"
+      },
+      {
+        "meanConviction": 70,
+        "n": 1,
+        "topic": "meaning"
+      },
+      {
+        "meanConviction": 60,
+        "n": 1,
+        "topic": "Artists Rights"
+      },
+      {
+        "meanConviction": 60,
+        "n": 1,
+        "topic": "Climate Action"
+      },
+      {
+        "meanConviction": 59,
+        "n": 1,
+        "topic": "process"
+      },
+      {
+        "meanConviction": 60,
+        "n": 1,
+        "topic": "AI Impacts"
+      },
+      {
+        "meanConviction": 85,
+        "n": 1,
+        "topic": "evidence"
+      },
+      {
+        "meanConviction": 74,
+        "n": 1,
+        "topic": "AI capability"
+      },
+      {
+        "meanConviction": 60,
+        "n": 1,
+        "topic": "AI Responsibility"
+      }
+    ],
+    "convictionStdev": 15.3,
+    "driftedFromSeed": 23,
+    "evolved": 8,
+    "matchedToSeed": 25,
+    "maxAbsConvictionDrift": 24,
+    "meanAbsConvictionDrift": 10.8,
+    "meanConviction": 77.3,
+    "netNewBeliefs": 7,
+    "seed": 24,
+    "shifted": 8,
+    "total": 32
+  },
+  "civic": {
+    "activeIssue": null,
+    "issuesLifetime": 3,
+    "passRate": 1,
+    "passed": 3,
+    "resolved": 3
+  },
+  "clockFrozen": false,
+  "day": 70,
+  "divergenceIndices": {
+    "beliefsDriftedFromSeed": 23,
+    "meanIdeaDrift": 10.8,
+    "polarizationScore": 0,
+    "reputationGini": 0.006,
+    "wealthGini": 0.423
+  },
+  "economy": {
+    "maxMoney": 3460,
+    "meanMoney": 1442,
+    "medianMoney": 1374,
+    "minMoney": 138,
+    "population": 8,
+    "totalMoney": 11532,
+    "wealthGini": 0.423
+  },
+  "factionTier": {
+    "count": 2,
+    "factions": [
+      {
+        "curious": 0,
+        "intensity": 100,
+        "meanCommitment": 98,
+        "members": 4,
+        "name": "Heartfelt Handcrafts Society",
+        "pole": -1,
+        "topic": "automation"
+      },
+      {
+        "curious": 0,
+        "intensity": 78,
+        "meanCommitment": 100,
+        "members": 1,
+        "name": "Guardrails Brigade",
+        "pole": 1,
+        "topic": "regulation"
+      }
+    ],
+    "largest": 4,
+    "polarizationScore": 0,
+    "rivalPairs": 0,
+    "totalAffiliated": 5
+  },
+  "goalTier": {
+    "active": 18,
+    "done": 7,
+    "meanProgressDays": 2.8,
+    "missed": 20,
+    "total": 45
+  },
+  "gossipTier": {
+    "eventsLifetime": 19,
+    "meanValence": 0.47,
+    "subjectsNetNegative": 1
+  },
+  "mood": {
+    "asleep": 2,
+    "meanEnergy": 77.1,
+    "meanFood": 66.3,
+    "meanLeisure": 57.4,
+    "meanMomentum": 48,
+    "meanSocial": 99.4,
+    "meanStress": 52.2
+  },
+  "reciprocity": {
+    "activeDebtEdges": 1,
+    "byKind": {
+      "favor": 0,
+      "gift": 2,
+      "loan": 1,
+      "repay": 1
+    },
+    "exchangesLifetime": 4,
+    "totalFavorDebt": 0,
+    "totalMoneyDebt": 60
+  },
+  "relationshipGraph": {
+    "edges": 56,
+    "meanAffinity": 17.4,
+    "meanFamiliarity": 89.4,
+    "meanRespect": 98.9,
+    "meanTrust": 66,
+    "mutualRomancePairs": 0,
+    "reputationGini": 0.006,
+    "reputationSpread": 1.2,
+    "romanticEdges": 0,
+    "strongTies": 0
+  },
+  "workTier": {
+    "behind": 2,
+    "totalMissed": 28,
+    "totalStandingPenalty": 100
+  },
+  "worldId": "m17ak02bk4cn9p4hbehx6whfts88fw4c"
+}

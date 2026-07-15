@@ -122,6 +122,86 @@ export function stripSpecialTokens(content: string): string {
     .trim();
 }
 
+// The small local model (deepseek-v2:16b) sometimes breaks character and NARRATES the task it was
+// given instead of doing it — e.g. "Task Summary: Craft an engaging chat between two characters…
+// Guidelines Met in Response: The response involved crafting a dialogue revolving around…". If that
+// leaks into a feed post or a line of dialogue it's jarringly out-of-world. These helpers detect and
+// strip it. stripMetaCommentary removes meta sentences (sentence/line-level, so a real line mixed in
+// survives); looksLikeMeta flags output that's narration through-and-through (used to trigger a
+// regeneration). Patterns are deliberately verb-anchored to avoid eating genuine in-character speech.
+const META_PATTERNS: RegExp[] = [
+  /\btask summary\b/i,
+  /\bguidelines?\s+(met|for|followed)\b/i,
+  /\bin (this|the) response\b/i,
+  /\bthe response (involved|was|is|focused|included|centered|revolved)\b/i,
+  /\bthis (focused )?(discussion|dialogue|conversation|response) (was|is|involved|revolved|focused|centered)/i,
+  /\bbetween (two|the) characters\b/i,
+  /\bcraft(ing|ed)? (an?|the)\b[^.!?]*\b(chat|dialogue|conversation|response|narrative)\b/i,
+  /\bas an? (ai|language model|assistant)\b/i,
+  /\bthe (user|assistant) (asked|wants|requested|is|would)\b/i,
+  /\b(here'?s|this is) (an?|the|my) (response|dialogue|answer|summary)\b/i,
+];
+
+function isMetaSentence(s: string): boolean {
+  return META_PATTERNS.some((re) => re.test(s));
+}
+
+export function stripMetaCommentary(content: string): string {
+  // Drop a leading meta label like "Task Summary:", "Response:", "Output:".
+  let t = content.replace(
+    /^\s*(task\s+summary|summary|response|output|answer|note|dialogue)\s*:\s*/i,
+    '',
+  );
+  // Sentence/line-level: drop the chunks that are the model narrating, keep anything real.
+  const parts = t.split(/(?<=[.!?])\s+|\n+/);
+  const kept = parts.filter((p) => p.trim() && !isMetaSentence(p));
+  return kept.join(' ').trim();
+}
+
+// deepseek also NOVELIZES dialogue: it wraps the spoken words in quotation marks and tacks on prose
+// stage-directions / attributions — '"Balance is paramount," I concede, my gaze skeptical. "But who
+// decides…"' — writing a novel instead of speaking a line. Like the meta-leak, it's an out-of-world
+// format artifact. stripNarration pulls the speech back out: when a line carries quoted speech with
+// narration around or between the quotes, keep the speech, drop the prose. A line with NO quotes
+// (plain speech) passes through untouched, so genuine dialogue is never rewritten.
+const SPEECH_SPAN = /[“"]([^“”"]+)[”"]/g;
+// A dialogue attribution / gesture beat sitting outside the quotes ("…," I say thoughtfully / she
+// murmured / my gaze skeptical). Anchors the single-span case so we strip real novelization without
+// eating genuine speech that happens to contain an inner quote.
+const ATTRIBUTION =
+  /\b(?:I|he|she|they|[A-Z][a-z]+)\b[^.!?]*\b(?:say|said|says|concede|conceded|repl|ask|asked|asks|murmur|mutter|note|noted|notes|add|added|adds|admit|observ|continu|think|thinks|thought|nod|shrug|smil|gaz|sigh|paus|whisper|thoughtful|skeptical|softly|quietly|wryly|dryly)/i;
+
+export function stripNarration(content: string): string {
+  const t = content.trim();
+  if (!t) return t;
+  // The observed leak always OPENS with the quoted speech; genuine speech with an inner quote
+  // (I told her "no way") does not. Gating on a leading quote protects real dialogue.
+  if (!/^[“"]/.test(t)) return t;
+  const spans: string[] = [];
+  let m: RegExpExecArray | null;
+  SPEECH_SPAN.lastIndex = 0;
+  while ((m = SPEECH_SPAN.exec(t)) !== null) spans.push(m[1].trim());
+  if (spans.length === 0) return t;
+  const speech = spans.join(' ').replace(/\s+/g, ' ').trim();
+  // Whatever survives once the quoted spans are removed is the prose the model wrapped around them.
+  const outside = t.replace(SPEECH_SPAN, ' ').replace(/\s+/g, ' ').trim();
+  // Rewrite when it's genuine novelization: the line is just wrapped in quotes (no leftover prose),
+  // OR it stitches multiple quoted fragments together, OR the leftover prose is a dialogue
+  // attribution. A single quote followed by unrelated real speech ('"No." That's final.') is left be.
+  if (speech && (outside.length === 0 || spans.length >= 2 || ATTRIBUTION.test(outside))) {
+    return speech.replace(/\s*,\s*$/, ''); // drop a dangling comma left by '"…,"'
+  }
+  return t;
+}
+
+// True when the output is task-narration through-and-through (nothing in-character survives, or it
+// still carries a hard meta marker). Use this to decide whether to regenerate.
+export function looksLikeMeta(content: string): boolean {
+  if (!content.trim()) return true;
+  if (/\btask summary\b|\bguidelines?\s+met\b/i.test(content)) return true;
+  return stripMetaCommentary(content).length === 0;
+}
+
 const AuthHeaders = (): Record<string, string> =>
   getLLMConfig().apiKey
     ? {

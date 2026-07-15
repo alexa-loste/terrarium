@@ -76,6 +76,14 @@ export default function Home() {
         <ChroniclePanel />
         <LibraryPanel />
 
+        {/* Freeze lives up top (center) so the Chronicle panel — which opens down the left — can't
+            cover it. Admin-only; renders null otherwise. */}
+        <div className="pointer-events-none absolute left-1/2 top-3 z-40 -translate-x-1/2">
+          <div className="pointer-events-auto">
+            <FreezeButton />
+          </div>
+        </div>
+
         <footer className="pointer-events-none absolute bottom-3 left-3 z-30 flex flex-col items-start gap-2">
           {controlsOpen && (
             <div className="pointer-events-auto flex scale-90 flex-col items-start gap-2">
@@ -87,7 +95,6 @@ export default function Home() {
             </div>
           )}
           <div className="pointer-events-auto flex items-center gap-2">
-            <FreezeButton />
             <button
               onClick={() => setControlsOpen((o) => !o)}
               title={controlsOpen ? 'Hide controls' : 'Show controls'}

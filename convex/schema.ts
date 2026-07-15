@@ -55,7 +55,47 @@ export default defineSchema({
     lastArtifactAt: v.optional(v.number()),
     lastJournalAt: v.optional(v.number()),
     lastReactAt: v.optional(v.number()),
+    lastPlanAt: v.optional(v.number()),
+    lastGatherAt: v.optional(v.number()),
+    lastFactionAt: v.optional(v.number()), // founded/joined a faction
+    lastFactionMoveAt: v.optional(v.number()), // led a faction's public stance
+    lastGossipAt: v.optional(v.number()), // confided a take about a third party
+    lastIssueAt: v.optional(v.number()), // put a civic proposition forward
+    lastLobbyAt: v.optional(v.number()), // campaigned / lobbied on the active issue
+    lastReciprocateAt: v.optional(v.number()), // gave / lent / repaid / did a favor
   }).index('playerId', ['worldId', 'playerId']),
+
+  // Shared plans / gatherings (v2.0): the world has no calendar months — time is a plain
+  // world-DAY counter (see data/clock.ts). When two characters make plans in a conversation
+  // ("let's grab coffee in a couple days"), we extract a single SHARED row here, anchored to an
+  // absolute world-day, with BOTH of them as attendees. This is what keeps everyone on the same
+  // page: instead of each agent half-remembering the plan in lossy vector memory, they all read
+  // from one structured object that's injected back into their prompts as it approaches. Others
+  // can join a host's gathering later. See data/plans.ts + convex/plans.ts.
+  plannedEvents: defineTable({
+    worldId: v.id('worlds'),
+    title: v.string(),
+    description: v.optional(v.string()),
+    day: v.number(), // absolute world-day the gathering lands on
+    hour: v.optional(v.number()), // 0..23 time of day, if one was agreed
+    placeName: v.optional(v.string()),
+    hostPlayerId: playerId,
+    hostName: v.string(),
+    attendees: v.array(v.object({ playerId, playerName: v.string() })),
+    // v2.8 — who PHYSICALLY showed up: filled live as attendees reach the venue during the event
+    // window. resolveDueGatherings counts THIS, not the RSVP list, so turnout is real attendance.
+    present: v.optional(v.array(v.object({ playerId, playerName: v.string() }))),
+    createdDay: v.number(), // world-day the plan was made
+    status: v.union(v.literal('upcoming'), v.literal('happened'), v.literal('missed')),
+    // v2.1: 'pair' = a plan two people made in conversation; 'gathering' = an OPEN event a host
+    // threw that anyone can join. Gatherings are the influence vector — hosting one people show
+    // up to grows the host's standing and spreads their beliefs (see convex/plans.ts resolve).
+    kind: v.optional(v.union(v.literal('pair'), v.literal('gathering'))),
+    turnout: v.optional(v.number()), // how many actually showed, set when it resolves
+    createdAt: v.number(),
+  })
+    .index('worldId', ['worldId'])
+    .index('byDay', ['worldId', 'day']),
 
   // Work obligation + standing (v1.9): each character's job cadence state. Scheduled workers
   // track whether they showed up today; deliverable workers track output this cycle. Falling
@@ -183,7 +223,190 @@ export default defineSchema({
     food: v.optional(v.number()), // 0..100
     money: v.optional(v.number()),
     social: v.optional(v.number()), // 0..100 — feeling connected/supported/liked (v1.5)
+    // v2.1 — the inner life. Leisure is a real need that trades off against work (drain + how
+    // much its deficit hurts are set by drives). Stress + momentum are DERIVED weather (not bars
+    // you fill): recomputed nightly from needs, goal progress, and relative standing, then they
+    // color how the character shows up in dialogue. See convex/mood.ts + data/drives.ts.
+    leisure: v.optional(v.number()), // 0..100 — fun / rest / time among people
+    stress: v.optional(v.number()), // 0..100 — felt pressure (higher = more strained)
+    momentum: v.optional(v.number()), // 0..100 — orientation toward goals (50 = neutral)
   }).index('playerId', ['worldId', 'playerId']),
+
+  // Drive profiles (v2.1): each character's stable motivational weights (ambition, recognition,
+  // connection, security, autonomy, craft, principle), seeded from data/drives.ts. The dial that
+  // personalizes how every need, goal, and rivalry is FELT. See convex/drives.ts.
+  driveProfiles: defineTable({
+    worldId: v.id('worlds'),
+    playerId,
+    playerName: v.string(),
+    profile: v.record(v.string(), v.number()), // DriveKey -> 0..100 weight
+    updatedAt: v.number(),
+  }).index('author', ['worldId', 'playerId']),
+
+  // Goals (v2.1): a two-tier ladder. One long-term aspiration per character (seeded from their
+  // drives, a far world-day horizon) and a rolling set of short-term milestones beneath it, each
+  // with a near deadline, set/refreshed during the nightly consolidation. Progress feeds mood —
+  // hitting a milestone is momentum, blowing a deadline is stress. See convex/goals.ts.
+  goals: defineTable({
+    worldId: v.id('worlds'),
+    playerId,
+    playerName: v.string(),
+    tier: v.union(v.literal('long'), v.literal('short')),
+    text: v.string(),
+    createdDay: v.number(),
+    dueDay: v.number(), // world-day the goal is meant to be reached by
+    status: v.union(v.literal('active'), v.literal('done'), v.literal('missed')),
+    note: v.optional(v.string()), // latest progress note / how it resolved
+    resolvedDay: v.optional(v.number()),
+    // v2.9 goal-pursuit: how many days they actually spent effort on this, and the last such day.
+    // Bumped by maybeWorkOnGoal; lets the nightly review credit goals that were genuinely worked
+    // (grounding completion) and lets a goal be worked at most once per day.
+    progressDays: v.optional(v.number()),
+    lastProgressDay: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index('author', ['worldId', 'playerId']),
+
+  // Factions (v2.3): the GROUP tier. A faction crystallizes around one bank of a charged belief
+  // fault line (regulation / automation / AI safety) and takes public stances. `intensity` is how
+  // hardline it currently is — it moves with what the faction DOES, and that's what members react
+  // to. Two factions on the same topic are rivals (opposite banks). See data/factions.ts.
+  factions: defineTable({
+    worldId: v.id('worlds'),
+    name: v.string(),
+    topic: v.string(), // the charged topic it formed around
+    pole: v.number(), // 1 | -1 — which bank of the fault line
+    premise: v.string(), // one-line manifesto, founder's voice
+    founderPlayerId: playerId,
+    founderName: v.string(),
+    foundedDay: v.number(),
+    intensity: v.number(), // 0..100 — how hardline; moves with its public moves
+    lastStance: v.optional(v.string()), // text of the most recent public stance
+    lastMoveDay: v.optional(v.number()),
+    status: v.union(v.literal('active'), v.literal('dissolved')),
+    createdAt: v.number(),
+  })
+    .index('worldId', ['worldId'])
+    .index('byTopic', ['worldId', 'topic']),
+
+  // Faction ties (v2.3): affiliation as a LIVING FIELD, not a roster. One row per (faction,
+  // character) holding a `commitment` 0..100 that moves over time — approve/disapprove of the
+  // faction's moves, belief-drift realignment, and social pull. A character can hold several ties
+  // at once (multiple memberships; primary = the highest). Crossing the band thresholds IS
+  // joining/leaving. See data/factions.ts (the dynamics) + convex/factions.ts.
+  factionTies: defineTable({
+    worldId: v.id('worlds'),
+    factionId: v.id('factions'),
+    playerId,
+    playerName: v.string(),
+    commitment: v.number(), // 0..100
+    role: v.union(v.literal('founder'), v.literal('member'), v.literal('curious')),
+    joinedDay: v.number(), // world-day they first crossed into membership
+    updatedAt: v.number(),
+  })
+    .index('byFaction', ['worldId', 'factionId'])
+    .index('byPlayer', ['worldId', 'playerId']),
+
+  // Reciprocity (v2.7): the horizontal economy — value moving person↔person. `exchanges` is the log
+  // of gifts/loans/repayments/favors; `reciprocityLedger` is the running balance per ordered pair —
+  // how much `from` OWES `to` (money borrowed not yet repaid; favors received not yet returned). Debt
+  // sits on the debtor's mind and frays the bond if it lingers; repaying builds trust. See
+  // data/reciprocity.ts.
+  exchanges: defineTable({
+    worldId: v.id('worlds'),
+    fromPlayerId: playerId,
+    fromName: v.string(),
+    toPlayerId: playerId,
+    toName: v.string(),
+    kind: v.union(
+      v.literal('gift'),
+      v.literal('loan'),
+      v.literal('repay'),
+      v.literal('favor'),
+    ),
+    amount: v.number(), // money for gift/loan/repay; 0 for a (non-money) favor
+    note: v.optional(v.string()),
+    day: v.number(),
+    createdAt: v.number(),
+  })
+    .index('worldId', ['worldId', 'createdAt'])
+    .index('from', ['worldId', 'fromPlayerId'])
+    .index('to', ['worldId', 'toPlayerId']),
+
+  // Directed running balance: what `from` owes `to`. moneyDebt = unrepaid loans; favorDebt = favors
+  // received and not yet returned (a soft count).
+  reciprocityLedger: defineTable({
+    worldId: v.id('worlds'),
+    fromPlayerId: playerId, // the one who owes
+    toPlayerId: playerId, // the one owed
+    moneyDebt: v.number(),
+    favorDebt: v.number(),
+    debtSinceDay: v.optional(v.number()), // world-day the current money-debt was opened (for aging)
+    updatedAt: v.number(),
+  })
+    .index('edge', ['worldId', 'fromPlayerId', 'toPlayerId'])
+    .index('debtor', ['worldId', 'fromPlayerId'])
+    .index('creditor', ['worldId', 'toPlayerId']),
+
+  // Civic issues (v2.6): a town-wide proposition that campaigns for a few world-days and then
+  // RESOLVES — winners and losers. One active issue at a time. Stances live in civicStances. The
+  // proposing faction, the rival, beliefs, gossip, and standing are all inputs; the outcome lands
+  // on status, mood, convictions, and faction cohesion. See data/civics.ts.
+  civicIssues: defineTable({
+    worldId: v.id('worlds'),
+    topic: v.string(),
+    favorsPole: v.number(),
+    title: v.string(),
+    text: v.string(),
+    proposerPlayerId: playerId,
+    proposerName: v.string(),
+    proposerFactionId: v.optional(v.id('factions')),
+    openedDay: v.number(),
+    resolvesDay: v.number(),
+    status: v.union(v.literal('campaigning'), v.literal('resolved')),
+    // Set on resolution:
+    passed: v.optional(v.boolean()),
+    forWeight: v.optional(v.number()),
+    againstWeight: v.optional(v.number()),
+    resolvedDay: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index('worldId', ['worldId'])
+    .index('byStatus', ['worldId', 'status']),
+
+  // Where each character stands on the active issue, and how firmly (weight = turnout × intensity).
+  // Seeded from their belief side + faction, then moved by persuasion during the campaign.
+  civicStances: defineTable({
+    worldId: v.id('worlds'),
+    issueId: v.id('civicIssues'),
+    playerId,
+    playerName: v.string(),
+    stance: v.union(v.literal('support'), v.literal('oppose'), v.literal('undecided')),
+    weight: v.number(), // 0..100
+    updatedAt: v.number(),
+  })
+    .index('byIssue', ['worldId', 'issueId'])
+    .index('byPlayer', ['worldId', 'playerId', 'issueId']),
+
+  // Gossip (v2.4): a record of one character confiding a take about an ABSENT third party to a
+  // confidant. Recording it both leaves a readable trail ("word going around about C") and, at write
+  // time, nudges the listener's view of the subject — scaled by how much the listener trusts the
+  // speaker. This is how third-party reputation propagates transitively. See data/gossip.ts.
+  gossipEvents: defineTable({
+    worldId: v.id('worlds'),
+    speakerPlayerId: playerId,
+    speakerName: v.string(),
+    listenerPlayerId: playerId,
+    listenerName: v.string(),
+    subjectPlayerId: playerId,
+    subjectName: v.string(),
+    valence: v.number(), // +1 warm (talking them up) / -1 cool (running them down)
+    line: v.string(), // what was actually said
+    day: v.number(),
+    createdAt: v.number(),
+  })
+    .index('worldId', ['worldId', 'createdAt'])
+    .index('bySubject', ['worldId', 'subjectPlayerId'])
+    .index('byListener', ['worldId', 'listenerPlayerId']),
 
   // The relationship graph (v1.5): a directed edge per ordered pair, holding how `from` feels
   // about `to` across a few dimensions. Updated from conversation outcomes and persisting as

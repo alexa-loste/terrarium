@@ -1,8 +1,10 @@
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import Button from './buttons/Button';
+import { useIsAdmin } from '../hooks/useRole';
 
 export default function FreezeButton() {
+  const isAdmin = useIsAdmin();
   const stopAllowed = useQuery(api.testing.stopAllowed) ?? false;
   const defaultWorld = useQuery(api.world.defaultWorldStatus);
 
@@ -21,7 +23,8 @@ export default function FreezeButton() {
     }
   };
 
-  return !stopAllowed ? null : (
+  // v2.2 — only the admin can freeze/unfreeze; viewers (T) never see this control.
+  return !isAdmin || !stopAllowed ? null : (
     <>
       <Button
         onClick={flipSwitch}

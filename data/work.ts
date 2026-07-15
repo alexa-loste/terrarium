@@ -14,7 +14,8 @@
 // wage gate, maybeGoToWork, deliverable counting, evaluateWorkDay) + convex/work.ts (state) +
 // convex/relationships.ts (standing penalty folds into reputation).
 
-import { wageFor } from './economy';
+import { wageFor, moneyStress, costOfLivingFor } from './economy';
+import { driveSeedFor, workOverLeisureFor, securityWeightFor } from './drives';
 
 export type Job =
   | { kind: 'scheduled'; startHour: number; endHour: number }
@@ -42,10 +43,63 @@ export function isScheduled(character: string): boolean {
   return jobFor(character).kind === 'scheduled';
 }
 
+// v2.9 — how strongly this character is pulled to actually GO WORK right now (0..1). The point
+// (per alexa): work should happen because it MATTERS to them, not on a flat dice roll. Three
+// real-life pressures, just like irl:
+//   - personality: their plain work-ethic / ambition (workOverLeisureFor) — the floor.
+//   - finance: a thin wallet relative to their cost of living pushes them to earn (moneyStress).
+//   - catch-up: already behind on the obligation → real pressure to make it up.
+// Low-pressure characters skip more, drift behind, and the catch-up term then raises their pull —
+// an emergent negative-feedback loop instead of everyone uniformly failing. The clamp keeps a
+// little humanity at both ends: even a workaholic sometimes detours, even a slacker sometimes shows.
+export function workPull(character: string, money: number, behind: boolean): number {
+  const profile = driveSeedFor(character)?.profile ?? {};
+  const ethic = workOverLeisureFor(profile); // ~0..1, personality
+  const finance = Math.min(
+    1,
+    moneyStress(money, costOfLivingFor(character), securityWeightFor(profile)) / 18,
+  );
+  const catchUp = behind ? 0.3 : 0;
+  return Math.max(0.08, Math.min(0.96, ethic + finance * 0.4 + catchUp - 0.05));
+}
+
+// v2.9 — once you're actually on the clock, how much do you keep your head down rather than let a
+// conversation pull you away? This is the steady-state FOCUS while working (distinct from workPull,
+// the pull to GO to work in the first place). Same personality root: a diligent character mostly
+// declines to start chatting on shift; an easily-distracted one socializes more. Clamped so even a
+// workaholic occasionally chats (0.9, not 1) and even a slacker keeps their head down sometimes
+// (0.45) — coworkers are still human, and a totally chat-free workplace would read as dead.
+export function workFocus(character: string): number {
+  const profile = driveSeedFor(character)?.profile ?? {};
+  const ethic = workOverLeisureFor(profile); // ~0..1, personality
+  return Math.max(0.45, Math.min(0.9, 0.5 + ethic * 0.45));
+}
+
 // Are they on shift right now? (scheduled jobs only.)
 export function withinShift(character: string, hour: number): boolean {
   const job = jobFor(character);
   return job.kind === 'scheduled' && hour >= job.startHour && hour < job.endHour;
+}
+
+// v2.3 — pick a sensible hour for a gathering the host is throwing: in the EVENING (after the
+// workday, before night) and never during the host's own shift. `pick01` is a 0..1 source the caller
+// supplies (Math.random) so the slot varies. Night is hour<6 or hour>=22; evening proper is 18–21,
+// which is when most people are off work and around — so that's the window we aim for.
+export function gatheringHourFor(character: string, pick01: number): number {
+  const job = jobFor(character);
+  // Start no earlier than 18 (evening), and after a scheduled host's shift ends if that's later.
+  const earliest = job.kind === 'scheduled' ? Math.max(18, job.endHour) : 18;
+  const latest = 21; // last hour before night (22:00)
+  if (earliest >= latest) return latest; // long shift (e.g. ends 20) → squeeze into 21
+  const span = latest - earliest;
+  return earliest + Math.round(Math.max(0, Math.min(1, pick01)) * span);
+}
+
+// Clamp an hour agreed in conversation out of the dead of night onto a reasonable evening time, so
+// two people don't "plan" to meet at 3am. Daytime/evening hours pass through untouched.
+export function sensiblePlanHour(hour: number): number {
+  if (hour >= 6 && hour < 22) return hour; // any waking hour is fine for a casual plan
+  return 19; // night → bump to a normal evening hour
 }
 
 // A short human label for the UI ("On shift 9–18" / "2 pieces / 2 days").

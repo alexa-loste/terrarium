@@ -49,9 +49,10 @@ export async function rememberConversation(
   const llmMessages: LLMMessage[] = [
     {
       role: 'user',
-      content: `You are ${player.name}, and you just finished a conversation with ${otherPlayer.name}. I would
-      like you to summarize the conversation from ${player.name}'s perspective, using first-person pronouns like
-      "I," and add if you liked or disliked this interaction.`,
+      content: `You are ${player.name}, and you just finished a conversation with ${otherPlayer.name}. ` +
+        `In one or two plain sentences, first person ("I"), note what you two actually talked about ` +
+        `and where it left things between you. Be factual and brief — no flourish, don't perform ` +
+        `your feelings, just what happened and what you took from it.`,
     },
   ];
   const authors = new Set<GameId<'players'>>();
@@ -67,7 +68,7 @@ export async function rememberConversation(
   llmMessages.push({ role: 'user', content: 'Summary:' });
   const { content } = await chatCompletion({
     messages: llmMessages,
-    max_tokens: 500,
+    max_tokens: 200,
   });
   const description = `Conversation with ${otherPlayer.name} at ${new Date(
     data.conversation._creationTime,
@@ -94,7 +95,11 @@ export async function rememberConversation(
   // third-person gist of what happened + how the two now feel about each other. Both
   // participants run this function, so only one side (deterministic by id) writes the entry.
   if (player.id < otherPlayer.id) {
-    const gist = await narrateConversation(player, otherPlayer, messages);
+    // Assess the relational shift FIRST so the chronicle gist can be written consistent with it.
+    // These were two independent calls and could contradict (gist "grew closer" while the outcome
+    // recorded "things cooled"). Now the same warmth/respect/trust deltas drive both.
+    const effect = await assessConversation(player, otherPlayer, messages);
+    const gist = await narrateConversation(player, otherPlayer, messages, effect);
     await ctx.runMutation(internal.townLog.recordEvent, {
       worldId,
       kind: 'conversation',
@@ -105,7 +110,6 @@ export async function rememberConversation(
       emoji: '💬',
     });
     // Update the relationship graph + both social bars from how the conversation landed.
-    const effect = await assessConversation(player, otherPlayer, messages);
     await ctx.runMutation(internal.relationships.applyConversationOutcome, {
       worldId,
       aPlayerId: player.id,
@@ -123,12 +127,29 @@ export async function rememberConversation(
   return description;
 }
 
+// Turn the assessed warmth/respect/trust deltas into a plain directional clause, so the chronicle
+// gist describes the SAME shift the relationship graph just recorded — no more "closer" vs "cooled".
+function relShiftLabel(e: { warmth: number; respect: number; trust: number }): string {
+  const parts: string[] = [];
+  if (e.warmth >= 2) parts.push('left them clearly warmer');
+  else if (e.warmth === 1) parts.push('left them a little warmer');
+  else if (e.warmth <= -2) parts.push('left a real chill between them');
+  else if (e.warmth === -1) parts.push('left them slightly cooler');
+  if (e.respect >= 2) parts.push('with more respect for each other');
+  else if (e.respect <= -2) parts.push('with respect dented');
+  if (e.trust <= -2) parts.push('and trust shaken');
+  if (!parts.length) return 'left them about where they started — no real change';
+  return parts.join(', ');
+}
+
 // The town chronicler's voice: a brief, neutral, third-person gist of a finished conversation
 // and the relational temperature it left behind. Deliberately NOT first-person or performative.
+// The shift is passed in (from assessConversation) so the gist can't contradict the recorded outcome.
 async function narrateConversation(
   player: { id: string; name: string },
   otherPlayer: { id: string; name: string },
   messages: Doc<'messages'>[],
+  effect: { warmth: number; respect: number; trust: number },
 ): Promise<string> {
   const transcript = messages
     .map((m) => `${m.author === player.id ? player.name : otherPlayer.name}: ${m.text}`)
@@ -140,10 +161,10 @@ async function narrateConversation(
         content:
           `You are the town chronicler, keeping a terse log of life in town. ` +
           `${player.name} and ${otherPlayer.name} just finished this conversation:\n\n${transcript}\n\n` +
+          `What it did to them: it ${relShiftLabel(effect)}. ` +
           `Write ONE or TWO short sentences, third person, plainly stating what they talked about ` +
-          `and how they seem to feel about each other afterward (e.g. warmer, allied, tense, ` +
-          `unimpressed, closer). Be concrete and a little dry. No quotes, no flourish. Under 220 ` +
-          `characters.\nLog entry:`,
+          `and reflecting THAT shift in how they feel about each other — do not contradict it. ` +
+          `Be concrete and a little dry. No quotes, no flourish. Under 220 characters.\nLog entry:`,
       },
     ],
     max_tokens: 160,
@@ -175,7 +196,11 @@ async function assessConversation(
           `Here is a conversation between ${player.name} and ${otherPlayer.name}:\n\n${transcript}\n\n` +
           `Rate how this conversation changed their relationship on three scales, each a single ` +
           `integer from -3 (much worse) to 3 (much better): warmth (do they like each other ` +
-          `more?), respect, and trust. Reply with ONLY three integers separated by spaces, e.g. "2 1 0".`,
+          `more?), respect, and trust. These move independently: a sharp but honest disagreement can ` +
+          `LOWER warmth while RAISING respect; politeness that papered over a real clash isn't warmth. ` +
+          `Don't default to positive — if they argued, talked past each other, or one needled the ` +
+          `other, reflect that with zero or negative numbers. ` +
+          `Reply with ONLY three integers separated by spaces, e.g. "-1 2 0".`,
       },
     ],
     temperature: 0,
