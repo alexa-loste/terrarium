@@ -105,6 +105,9 @@ export default function PlayerDetails({
   const beliefs = useQuery(api.beliefs.getForPlayer, playerId ? { worldId, playerId } : 'skip');
 
   const work = useQuery(api.work.getForPlayer, playerId ? { worldId, playerId } : 'skip');
+  // Per-agent traits (home/workplace/job/poles). Null for the founding cast on an un-seeded world,
+  // which jobLabel reads as "use the name table" — the same label it has always shown.
+  const traits = useQuery(api.agentTraits.getForPlayer, playerId ? { worldId, playerId } : 'skip');
 
   const plans = useQuery(api.plans.getForPlayer, playerId ? { worldId, playerId } : 'skip');
   const clock = useQuery(api.clock.getClock, { worldId });
@@ -358,7 +361,7 @@ export default function PlayerDetails({
       {work && playerDescription && (
         <div className="box flex-grow mt-4">
           <h2 className="bg-brown-700 text-base text-center">
-            💼 {jobLabel(playerDescription.name)}
+            💼 {jobLabel(playerDescription.name, traits)}
             {work.quota != null && (
               <span className="text-brown-300">
                 {' '}

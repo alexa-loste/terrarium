@@ -2,6 +2,7 @@ import { v } from 'convex/values';
 import { internalMutation, internalQuery, query } from './_generated/server';
 import { playerId } from './aiTown/ids';
 import { CHARGED_TOPICS, priorPole } from '../data/factions';
+import { getTraitsByPlayer } from './agentTraits';
 
 // Terrarium v1.5 — the relationship graph + reputation. Directed edges (how `from` feels about
 // `to`) are nudged whenever a conversation ends; reputation is derived from inbound edges.
@@ -224,6 +225,7 @@ export const seedBeliefBasedRelationships = internalMutation({
       .withIndex('worldId', (q: any) => q.eq('worldId', args.worldId))
       .collect();
     const now = Date.now();
+    const traitsByPlayer = await getTraitsByPlayer(ctx, args.worldId);
     let seeded = 0;
     for (const a of cast) {
       for (const b of cast) {
@@ -231,8 +233,8 @@ export const seedBeliefBasedRelationships = internalMutation({
         // Net alignment over the topics they BOTH hold a position on.
         let net = 0;
         for (const t of CHARGED_TOPICS) {
-          const pa = priorPole(a.name, t);
-          const pb = priorPole(b.name, t);
+          const pa = priorPole(a.name, t, traitsByPlayer.get(String(a.playerId)));
+          const pb = priorPole(b.name, t, traitsByPlayer.get(String(b.playerId)));
           if (pa == null || pb == null) continue;
           net += pa === pb ? 1 : -1;
         }

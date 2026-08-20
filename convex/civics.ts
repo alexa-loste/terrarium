@@ -16,6 +16,7 @@ import {
 } from '../data/civics';
 import { areRivals, priorPole } from '../data/factions';
 import { costOfLivingFor } from '../data/economy';
+import { getTraitsByPlayer } from './agentTraits';
 
 // Terrarium v2.6 — CIVIC OUTCOMES storage + resolution. The thin Convex layer; the dynamics
 // (stance derivation, persuasion, tally) are pure in data/civics.ts.
@@ -137,12 +138,13 @@ export const openIssue = internalMutation({
       createdAt: now,
     });
 
+    const traitsByPlayer = await getTraitsByPlayer(ctx, args.worldId);
     for (const d of await cast(ctx, args.worldId)) {
       const pid = String(d.playerId);
       const conv = await convictionOn(ctx, args.worldId, pid, args.topic);
       const factionAlignment = proposerMembers.has(pid) ? 1 : rivalMembers.has(pid) ? -1 : 0;
       const { stance, weight } = initialStance(
-        priorPole(d.name, args.topic),
+        priorPole(d.name, args.topic, traitsByPlayer.get(pid)),
         conv,
         prop,
         factionAlignment as 0 | 1 | -1,
@@ -276,6 +278,7 @@ export const resolveDue = internalMutation({
 
     // One-time MATERIAL effect on a pass — the outcome isn't just status, it touches lives.
     if (result.passed) {
+      const traitsByPlayer = await getTraitsByPlayer(ctx, args.worldId);
       for (const d of await cast(ctx, args.worldId)) {
         const vit = await ctx.db
           .query('agentVitals')
@@ -287,9 +290,15 @@ export const resolveDue = internalMutation({
         if (issue.topic === 'automation' && costOfLivingFor(d.name) <= 25) {
           dStress = -6; // the transition fund eases those living closest to the edge
           dLeisure = 6;
-        } else if (issue.topic === 'regulation' && priorPole(d.name, 'regulation') === -1) {
+        } else if (
+          issue.topic === 'regulation' &&
+          priorPole(d.name, 'regulation', traitsByPlayer.get(String(d.playerId))) === -1
+        ) {
           dStress = 6; // the ordinance constrains the builder-freedom side
-        } else if (issue.topic === 'AI safety' && priorPole(d.name, 'AI safety') === -1) {
+        } else if (
+          issue.topic === 'AI safety' &&
+          priorPole(d.name, 'AI safety', traitsByPlayer.get(String(d.playerId))) === -1
+        ) {
           dStress = 5; // a brake on the fastest movers
         }
         if (dStress || dLeisure) {

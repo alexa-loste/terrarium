@@ -18,6 +18,7 @@ import {
   reactionToMove,
   RECRUIT_COMMIT,
 } from '../data/factions';
+import { getTraits, getTraitsByPlayer } from './agentTraits';
 
 // Terrarium v2.3 — FACTIONS storage + dynamics. The group tier of the sim.
 //
@@ -228,11 +229,18 @@ export const recordMove = internalMutation({
     const move = { pole: faction.pole, intensity: args.moveIntensity };
     const joined: string[] = [];
     const left: string[] = [];
+    // One scan for the whole cast's traits — every tie below needs the tied player's poles.
+    const traitsByPlayer = await getTraitsByPlayer(ctx, args.worldId);
 
     // Own members react.
     for (const tie of await tiesFor(ctx, args.worldId, args.factionId)) {
       const conv = await convictionOn(ctx, args.worldId, tie.playerId, faction.topic);
-      const delta = reactionToMove(priorPole(tie.playerName, faction.topic), conv, move, 'own');
+      const delta = reactionToMove(
+        priorPole(tie.playerName, faction.topic, traitsByPlayer.get(String(tie.playerId))),
+        conv,
+        move,
+        'own',
+      );
       await applyCommitmentDelta(ctx, tie, delta, args.currentDay, joined, left, faction.name);
     }
 
@@ -242,7 +250,12 @@ export const recordMove = internalMutation({
     if (rival) {
       for (const tie of await tiesFor(ctx, args.worldId, rival._id)) {
         const conv = await convictionOn(ctx, args.worldId, tie.playerId, rival.topic);
-        const delta = reactionToMove(priorPole(tie.playerName, rival.topic), conv, move, 'rival');
+        const delta = reactionToMove(
+          priorPole(tie.playerName, rival.topic, traitsByPlayer.get(String(tie.playerId))),
+          conv,
+          move,
+          'rival',
+        );
         await applyCommitmentDelta(ctx, tie, delta, args.currentDay, joined, left, rival.name);
       }
     }
@@ -298,6 +311,7 @@ export const nightlyAffiliation = internalMutation({
   handler: async (ctx, args) => {
     const joined: string[] = [];
     const left: string[] = [];
+    const traits = await getTraits(ctx, args.worldId, args.playerId);
     const all = await activeFactions(ctx, args.worldId);
     const myTies = await tiesOf(ctx, args.worldId, args.playerId);
     const tiedFactionIds = new Set(myTies.map((t) => String(t.factionId)));
@@ -317,7 +331,7 @@ export const nightlyAffiliation = internalMutation({
         continue;
       }
       const conv = await convictionOn(ctx, args.worldId, args.playerId, faction.topic);
-      const align = alignment(priorPole(args.playerName, faction.topic), conv, faction);
+      const align = alignment(priorPole(args.playerName, faction.topic, traits), conv, faction);
 
       // Social pull: average warmth toward my co-members (-1..1).
       const co = (await tiesFor(ctx, args.worldId, faction._id)).filter(
@@ -353,7 +367,7 @@ export const nightlyAffiliation = internalMutation({
     // interest — "drawn toward"). Seed a low tie so it can grow or fade on its own.
     for (const f of all) {
       if (tiedFactionIds.has(String(f._id))) continue;
-      const mine = priorPole(args.playerName, f.topic);
+      const mine = priorPole(args.playerName, f.topic, traits);
       if (mine == null || Math.sign(mine) !== Math.sign(f.pole)) continue;
       const conv = await convictionOn(ctx, args.worldId, args.playerId, f.topic);
       const align = alignment(mine, conv, f);

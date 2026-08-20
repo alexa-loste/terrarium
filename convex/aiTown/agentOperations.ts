@@ -111,6 +111,7 @@ import {
   startConversationMessage,
 } from '../agent/conversation';
 import { assertNever } from '../util/assertNever';
+import { AgentTraits } from '../../data/traits';
 import { serializedAgent } from './agent';
 import { ACTIVITIES, ACTIVITY_COOLDOWN, CONVERSATION_COOLDOWN } from '../constants';
 import { api, internal } from '../_generated/api';
@@ -238,6 +239,12 @@ export const agentDoSomething = internalAction({
         worldId: args.worldId,
         playerId: player.id,
       });
+      // Their stored traits — home, workplace, job, poles. Null for an un-seeded world, which every
+      // data/ accessor reads as "use the name table", i.e. exactly the pre-agentTraits behavior.
+      const traits: AgentTraits | null = await ctx.runQuery(internal.agentTraits.traitsFor, {
+        worldId: args.worldId,
+        playerId: player.id,
+      });
       const vitals = await ctx.runQuery(internal.agentVitals.getVitals, {
         worldId: args.worldId,
         playerId: player.id,
@@ -245,12 +252,12 @@ export const agentDoSomething = internalAction({
       // Tick needs + economy: sleep at night (+ overnight consolidation), otherwise drain
       // energy/food/social, earn wages while working, and eat when hungry. Returns true if this
       // tick was consumed (asleep or eating), in which case we skip the waking behavior below.
-      if (await tickVitals(ctx, args, now, time, character, vitals)) {
+      if (await tickVitals(ctx, args, now, time, character, vitals, traits)) {
         return;
       }
       // Pull toward your workplace when the pressure to work is real (v2.9 — personality + finances
       // + catch-up). Covers scheduled shifts AND deliverable workers during the work phase.
-      if (await maybeGoToWork(ctx, args, time, character, vitals)) {
+      if (await maybeGoToWork(ctx, args, time, character, vitals, traits)) {
         return;
       }
       // v2.8 — if you committed to a gathering happening around now, physically get to the venue;
@@ -261,7 +268,7 @@ export const agentDoSomething = internalAction({
       }
       // While actually at work during work hours, sometimes produce a real artifact — a
       // research note, policy memo, article, artwork, etc. (their job's tangible output).
-      if (await maybeMakeArtifact(ctx, args, now, time, character)) {
+      if (await maybeMakeArtifact(ctx, args, now, time, character, traits)) {
         return;
       }
       // v2.9 — actually WORK a goal. A character with a pressing short-term goal spends a beat
@@ -290,7 +297,7 @@ export const agentDoSomething = internalAction({
       }
       // v2.1 — now and then throw an open gathering (the influence move), or RSVP to someone
       // else's. Drive-gated: recognition/connection-driven characters host + show up more.
-      if (await maybeProposeGathering(ctx, args, now, time, character)) {
+      if (await maybeProposeGathering(ctx, args, now, time, character, traits)) {
         return;
       }
       if (await maybeJoinGathering(ctx, args, now, time, character)) {
@@ -298,7 +305,7 @@ export const agentDoSomething = internalAction({
       }
       // v2.3 — the GROUP tier. Now and then, found a faction around a strong conviction (turning a
       // belief fault-line into a side), or, if you lead one, take a public stance the town reacts to.
-      if (await maybeFormFaction(ctx, args, now, time, character)) {
+      if (await maybeFormFaction(ctx, args, now, time, character, traits)) {
         return;
       }
       if (await maybeFactionMove(ctx, args, now, time, character)) {
@@ -326,7 +333,7 @@ export const agentDoSomething = internalAction({
         // Head toward a meaningful place driven by the time of day: work by day, the bar or
         // park in the evening, home at night. Falls back to wandering if we can't resolve who.
         const destination = character
-          ? chooseDestination(character, map.width, map.height, time.phase)
+          ? chooseDestination(character, map.width, map.height, time.phase, traits)
           : wanderDestination(map);
         await sleep(Math.random() * 1000);
         await ctx.runMutation(api.aiTown.main.sendInput, {
@@ -375,9 +382,15 @@ export const agentDoSomething = internalAction({
         worldId: args.worldId,
         playerId: player.id,
       });
+      const traits: AgentTraits | null = await ctx.runQuery(internal.agentTraits.traitsFor, {
+        worldId: args.worldId,
+        playerId: player.id,
+      });
       const onShift =
         !!character &&
-        (isScheduled(character) ? withinShift(character, time.hour) : time.phase === 'work');
+        (isScheduled(character, traits)
+          ? withinShift(character, time.hour, traits)
+          : time.phase === 'work');
       focusingOnWork = onShift && Math.random() < workFocus(character!);
     }
 
@@ -485,9 +498,13 @@ const SOCIAL_DECAY = 1; // social slowly fades with time; conversations/posts re
 const SLEEP_DURATION = 60_000; // re-decide ~once a minute while asleep (cheap; no LLM)
 
 // True if the agent is standing at their workplace (so working there earns their wage).
-function atWorkplace(character: string | null, pos?: { x: number; y: number }): boolean {
+function atWorkplace(
+  character: string | null,
+  pos?: { x: number; y: number },
+  traits?: AgentTraits | null,
+): boolean {
   if (!character || !pos) return false;
-  const w = workFor(character);
+  const w = workFor(character, traits);
   if (!w) return false;
   return Math.hypot(w.x - pos.x, w.y - pos.y) <= w.radius + 0.5;
 }
@@ -499,6 +516,7 @@ async function tickVitals(
   time: WorldTime,
   character: string | null,
   vitals: any,
+  traits: AgentTraits | null,
 ): Promise<boolean> {
   const asleep = vitals?.asleep ?? false;
   const energy = vitals?.energy ?? MAX_ENERGY;
@@ -516,8 +534,8 @@ async function tickVitals(
 
   // --- Night: sleep, with one overnight consolidation that recharges energy. ---
   if (time.phase === 'night') {
-    const home = character ? homeFor(character) : undefined;
-    const isHome = atHomePlace(character, args.player.position);
+    const home = character ? homeFor(character, traits) : undefined;
+    const isHome = atHomePlace(character, args.player.position, traits);
     if (!asleep) {
       // v2.8 — sleep is PHYSICAL: your own bed gives a full recharge + the overnight consolidation
       // (memory reflection, journaling, belief drift). If you're still out when night falls, head
@@ -615,7 +633,8 @@ async function tickVitals(
   // Morning/work hours drain as before; sleep still does the big overnight energy recharge.
   // leisureDrainFor still sets the per-character drain rate by drive (ambitious barely notice).
   const dProfile = (character && driveSeedFor(character)?.profile) || {};
-  const onShiftNow = !!character && isScheduled(character) && withinShift(character, time.hour);
+  const onShiftNow =
+    !!character && isScheduled(character, traits) && withinShift(character, time.hour, traits);
   if (time.phase === 'evening' && !onShiftNow) {
     patch.energy = Math.min(MAX_ENERGY, energy + EVENING_RECOVERY);
     patch.leisure = Math.min(100, (vitals?.leisure ?? START_LEISURE) + LEISURE_RECOVERY);
@@ -630,9 +649,9 @@ async function tickVitals(
   // counts as showing up today (v1.9). Deliverable workers are paid per shipped piece instead.
   if (
     character &&
-    isScheduled(character) &&
-    withinShift(character, time.hour) &&
-    atWorkplace(character, args.player.position)
+    isScheduled(character, traits) &&
+    withinShift(character, time.hour, traits) &&
+    atWorkplace(character, args.player.position, traits)
   ) {
     nextMoney += wageFor(character);
     await ctx.runMutation(internal.work.markAttended, {
@@ -877,9 +896,10 @@ async function maybeMakeArtifact(
   now: number,
   time: WorldTime,
   character: string | null,
+  traits: AgentTraits | null,
 ): Promise<boolean> {
   if (time.phase !== 'work' || !character) return false;
-  if (!atWorkplace(character, args.player.position)) return false;
+  if (!atWorkplace(character, args.player.position, traits)) return false;
   // Behind on your deliverables? You push harder to ship (v1.9).
   const ws = await ctx.runQuery(api.work.getForPlayer, {
     worldId: args.worldId,
@@ -969,7 +989,7 @@ async function maybeMakeArtifact(
     playerName: character,
     day: time.day,
   });
-  if (jobFor(character).kind === 'deliverable') {
+  if (jobFor(character, traits).kind === 'deliverable') {
     await ctx.runMutation(internal.agentVitals.addMoney, {
       worldId: args.worldId,
       playerId: args.player.id,
@@ -1260,18 +1280,19 @@ async function maybeGoToWork(
   time: WorldTime,
   character: string | null,
   vitals: any,
+  traits: AgentTraits | null,
 ): Promise<boolean> {
   if (!character) return false;
   // When should this person be working? A scheduled worker during their shift; a deliverable worker
   // (founder/artist/journalist) through the work phase, when their output is expected. Deliverable
   // workers previously had NO pull to their workplace at all — they only shipped by coincidence.
-  const shouldWork = isScheduled(character)
-    ? withinShift(character, time.hour)
+  const shouldWork = isScheduled(character, traits)
+    ? withinShift(character, time.hour, traits)
     : time.phase === 'work';
   if (!shouldWork) return false;
-  const w = workFor(character);
+  const w = workFor(character, traits);
   if (!w) return false;
-  if (atWorkplace(character, args.player.position)) return false; // already there
+  if (atWorkplace(character, args.player.position, traits)) return false; // already there
   // v2.9 — pressure to actually GO: personality work-ethic + a thin wallet + being behind (catch-up).
   // A low-pressure character skips more, drifts behind, and that catch-up pressure then pulls them
   // back — emergent, like real life — instead of everyone uniformly failing on a flat 20% dice roll.
@@ -1524,6 +1545,7 @@ async function maybeProposeGathering(
   now: number,
   time: WorldTime,
   character: string | null,
+  traits: AgentTraits | null,
 ): Promise<boolean> {
   if (!character || time.phase === 'night') return false;
   const seed = driveSeedFor(character);
@@ -1566,7 +1588,7 @@ async function maybeProposeGathering(
 
   const day = time.day + 1 + Math.floor(Math.random() * 3); // 1-3 days out
   // An evening slot after the host's own workday, never in the dead of night (v2.3).
-  const hour = gatheringHourFor(character, Math.random());
+  const hour = gatheringHourFor(character, Math.random(), traits);
   await ctx.runMutation(internal.plans.proposeGathering, {
     worldId: args.worldId,
     title: pitch.title,
@@ -1682,6 +1704,7 @@ async function maybeFormFaction(
   now: number,
   time: WorldTime,
   character: string | null,
+  traits: AgentTraits | null,
 ): Promise<boolean> {
   if (!character || time.phase === 'night') return false;
   if (Math.random() >= FORM_FACTION_CHANCE) return false;
@@ -1709,20 +1732,30 @@ async function maybeFormFaction(
       (b) =>
         (CHARGED_TOPICS as readonly string[]).includes(b.topic) &&
         b.conviction >= FOUND_CONVICTION &&
-        priorPole(character, b.topic) != null,
+        priorPole(character, b.topic, traits) != null,
     )
     .filter((b) => {
-      const myPole = priorPole(character, b.topic)!;
+      const myPole = priorPole(character, b.topic, traits)!;
       return !snap.banks.includes(`${b.topic}:${Math.sign(myPole)}`);
     })
     .sort((a, b) => b.conviction - a.conviction);
   if (!foundable.length) return false;
   const pick = foundable[0];
-  const myPole = priorPole(character, pick.topic)!;
+  const myPole = priorPole(character, pick.topic, traits)!;
 
   // Who else in town has a side on this topic (for the founder to weigh as ally or opponent)?
+  // Everyone else's poles in one query — a runtime-born townsperson has a side too, and it lives
+  // in their traits row, not in the name table.
+  const traitsByPlayer: Record<string, AgentTraits> = await ctx.runQuery(
+    internal.agentTraits.traitsForWorld,
+    { worldId: args.worldId },
+  );
   const candidates = (cc.others as { playerId: string; name: string }[])
-    .map((o) => ({ playerId: o.playerId, name: o.name, pole: priorPole(o.name, pick.topic) }))
+    .map((o) => ({
+      playerId: o.playerId,
+      name: o.name,
+      pole: priorPole(o.name, pick.topic, traitsByPlayer[String(o.playerId)]),
+    }))
     .filter((o): o is { playerId: string; name: string; pole: 1 | -1 } => o.pole != null);
   const allies = candidates.filter((o) => Math.sign(o.pole) === Math.sign(myPole));
   if (!allies.length) return false; // a faction of one isn't a side

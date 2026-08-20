@@ -10,6 +10,7 @@ import {
   STANDING_RECOVERY_PER_DAY,
 } from '../data/work';
 import { dailySavingsFor } from '../data/economy';
+import { getTraits } from './agentTraits';
 
 // v1.9 — work obligation state + the daily evaluation that applies the stakes.
 
@@ -51,7 +52,7 @@ export const recordDeliverable = internalMutation({
     const next = ws.deliverablesThisCycle + 1;
     const patch: any = { deliverablesThisCycle: next };
     // Hitting quota mid-cycle clears the "behind" pressure right away.
-    const job = jobFor(args.playerName);
+    const job = jobFor(args.playerName, await getTraits(ctx, args.worldId, args.playerId));
     if (job.kind === 'deliverable' && next >= job.quota && ws.behind) patch.behind = false;
     await ctx.db.patch(ws._id, patch);
   },
@@ -68,7 +69,7 @@ export const evaluate = internalMutation({
     if (ws.lastEvalDay === args.day) {
       return { behind: ws.behind, message: null };
     }
-    const job = jobFor(args.playerName);
+    const job = jobFor(args.playerName, await getTraits(ctx, args.worldId, args.playerId));
     let moneyPenalty = 0;
     let standingAdd = 0;
     let behind = false;
@@ -131,7 +132,7 @@ export const getForPlayer = query({
       .withIndex('author', (q) => q.eq('worldId', args.worldId).eq('playerId', args.playerId))
       .first();
     if (!ws) return null;
-    const job = jobFor(ws.playerName);
+    const job = jobFor(ws.playerName, await getTraits(ctx, args.worldId, args.playerId));
     return {
       behind: ws.behind,
       standingPenalty: ws.standingPenalty,

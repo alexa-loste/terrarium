@@ -3,6 +3,7 @@ import { internalMutation, internalQuery, query } from './_generated/server';
 import { playerId } from './aiTown/ids';
 import { PLAN_VISIBLE_WITHIN_DAYS } from '../data/plans';
 import { gatheringHourFor } from '../data/work';
+import { getTraitsByPlayer } from './agentTraits';
 
 // v2.3 one-off — give already-scheduled gatherings (created before time-of-day existed) a sensible
 // evening hour after the host's shift, so they read "in 2 days at 19:00" like new ones do.
@@ -14,10 +15,17 @@ export const backfillGatheringHours = internalMutation({
       .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
       .collect();
     let patched = 0;
+    const traitsByPlayer = await getTraitsByPlayer(ctx, args.worldId);
     for (const r of rows) {
       if (r.status !== 'upcoming' || typeof r.hour === 'number') continue;
       if (r.kind !== 'gathering') continue; // pair-plans can stay open-time by design
-      await ctx.db.patch(r._id, { hour: gatheringHourFor(r.hostName, Math.random()) });
+      await ctx.db.patch(r._id, {
+        hour: gatheringHourFor(
+          r.hostName,
+          Math.random(),
+          traitsByPlayer.get(String(r.hostPlayerId)),
+        ),
+      });
       patched++;
     }
     return patched;

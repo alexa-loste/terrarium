@@ -59,8 +59,20 @@ export function poleLabel(topic: string, pole: number): string {
   return t[pole >= 0 ? '1' : '-1'];
 }
 
+// A per-agent override, read from the `agentTraits` DB table by convex/agentTraits.ts and passed
+// in by the caller. When a row is supplied it is AUTHORITATIVE: a topic absent from `poles` means
+// "this character has no side on it", NOT "go look the name up". That distinction is the point —
+// a character born at runtime has no TOPIC_POLE entry, and falling back to the name table would
+// silently hand them nothing while looking identical to a genuine absence of conviction. Passing
+// no traits keeps the pre-agentTraits behavior byte-for-byte.
+export type PoleTraits = { poles?: Record<string, number> };
+
 // The stable side prior for a character on a topic (null if they have no strong seeded side).
-export function priorPole(name: string, topic: string): Pole | null {
+export function priorPole(name: string, topic: string, traits?: PoleTraits | null): Pole | null {
+  if (traits) {
+    const p = traits.poles?.[topic];
+    return p === 1 || p === -1 ? p : null;
+  }
   return TOPIC_POLE[name]?.[topic as ChargedTopic] ?? null;
 }
 

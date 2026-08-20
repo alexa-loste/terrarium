@@ -34,13 +34,39 @@ export const JOBS: Record<string, Job> = {
 };
 
 const DEFAULT_JOB: Job = { kind: 'deliverable', quota: 1, perDays: 2 };
+const DEFAULT_SHIFT = { startHour: 9, endHour: 17 };
 
-export function jobFor(character: string): Job {
+// A per-agent override, read from the `agentTraits` DB table by convex/agentTraits.ts and passed
+// down. `data/` stays pure — this is just the row's shape. Its fields are all optional because the
+// stored table's are; missing pieces fall back to the generic job, never to the name table (a row,
+// when present, is authoritative — that's what lets a runtime-born character have a real job).
+export type JobTraits = {
+  job?: {
+    kind: 'scheduled' | 'deliverable';
+    startHour?: number;
+    endHour?: number;
+    quota?: number;
+    perDays?: number;
+  } | null;
+};
+
+export function jobFor(character: string, traits?: JobTraits | null): Job {
+  const j = traits?.job;
+  if (j) {
+    return j.kind === 'scheduled'
+      ? {
+          kind: 'scheduled',
+          startHour: j.startHour ?? DEFAULT_SHIFT.startHour,
+          endHour: j.endHour ?? DEFAULT_SHIFT.endHour,
+        }
+      : { kind: 'deliverable', quota: j.quota ?? 1, perDays: j.perDays ?? 2 };
+  }
+  if (traits) return DEFAULT_JOB; // a row with no job: the generic obligation, not a name lookup
   return JOBS[character] ?? DEFAULT_JOB;
 }
 
-export function isScheduled(character: string): boolean {
-  return jobFor(character).kind === 'scheduled';
+export function isScheduled(character: string, traits?: JobTraits | null): boolean {
+  return jobFor(character, traits).kind === 'scheduled';
 }
 
 // v2.9 — how strongly this character is pulled to actually GO WORK right now (0..1). The point
@@ -76,8 +102,8 @@ export function workFocus(character: string): number {
 }
 
 // Are they on shift right now? (scheduled jobs only.)
-export function withinShift(character: string, hour: number): boolean {
-  const job = jobFor(character);
+export function withinShift(character: string, hour: number, traits?: JobTraits | null): boolean {
+  const job = jobFor(character, traits);
   return job.kind === 'scheduled' && hour >= job.startHour && hour < job.endHour;
 }
 
@@ -85,8 +111,12 @@ export function withinShift(character: string, hour: number): boolean {
 // workday, before night) and never during the host's own shift. `pick01` is a 0..1 source the caller
 // supplies (Math.random) so the slot varies. Night is hour<6 or hour>=22; evening proper is 18–21,
 // which is when most people are off work and around — so that's the window we aim for.
-export function gatheringHourFor(character: string, pick01: number): number {
-  const job = jobFor(character);
+export function gatheringHourFor(
+  character: string,
+  pick01: number,
+  traits?: JobTraits | null,
+): number {
+  const job = jobFor(character, traits);
   // Start no earlier than 18 (evening), and after a scheduled host's shift ends if that's later.
   const earliest = job.kind === 'scheduled' ? Math.max(18, job.endHour) : 18;
   const latest = 21; // last hour before night (22:00)
@@ -103,8 +133,8 @@ export function sensiblePlanHour(hour: number): number {
 }
 
 // A short human label for the UI ("On shift 9–18" / "2 pieces / 2 days").
-export function jobLabel(character: string): string {
-  const job = jobFor(character);
+export function jobLabel(character: string, traits?: JobTraits | null): string {
+  const job = jobFor(character, traits);
   if (job.kind === 'scheduled') return `Shift ${job.startHour}:00–${job.endHour}:00`;
   return `${job.quota} ${job.quota === 1 ? 'piece' : 'pieces'} / ${job.perDays} days`;
 }

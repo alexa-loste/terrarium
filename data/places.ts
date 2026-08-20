@@ -129,12 +129,22 @@ export const WorkplaceId: Record<string, string> = {
 
 const ALL_PLACES = [...Places, ...Homes];
 
-export function homeFor(character: string): Place | undefined {
+// A per-agent override, read from the `agentTraits` DB table by convex/agentTraits.ts and passed
+// down. `data/` stays pure — it never touches the DB, it just accepts the row's shape. When a row
+// is supplied it is AUTHORITATIVE (a missing field means "they genuinely have none", not "go look
+// in the name table"), which is what lets a character born at runtime with a novel name resolve at
+// all. With no row we fall back to the founding-cast name tables below, exactly as before.
+export type PlaceTraits = { homePlaceId?: string; workplaceId?: string };
+
+export function homeFor(character: string, traits?: PlaceTraits | null): Place | undefined {
+  if (traits) {
+    return traits.homePlaceId ? Homes.find((h) => h.id === traits.homePlaceId) : undefined;
+  }
   return Homes.find((h) => h.owner === character);
 }
 
-export function workFor(character: string): Place | undefined {
-  const id = WorkplaceId[character];
+export function workFor(character: string, traits?: PlaceTraits | null): Place | undefined {
+  const id = traits ? traits.workplaceId : WorkplaceId[character];
   return id ? Places.find((p) => p.id === id) : undefined;
 }
 
@@ -151,9 +161,13 @@ export function atPlace(place: Place | undefined, pos?: { x: number; y: number }
 }
 
 // True if a character is home (for sleep-at-home: full rest only in your own bed). v2.8.
-export function atHome(character: string | null, pos?: { x: number; y: number }): boolean {
+export function atHome(
+  character: string | null,
+  pos?: { x: number; y: number },
+  traits?: PlaceTraits | null,
+): boolean {
   if (!character) return false;
-  return atPlace(homeFor(character), pos);
+  return atPlace(homeFor(character, traits), pos);
 }
 
 // The named place a tile is "at", or undefined if out in the open. Closest within radius wins.
@@ -180,9 +194,13 @@ const randomPlace = (): Place => Places[Math.floor(Math.random() * Places.length
 // function still works without a clock.
 export type DayPhase = 'night' | 'morning' | 'work' | 'evening';
 
-function destinationForPhase(character: string, phase?: DayPhase): Place {
-  const home = homeFor(character);
-  const work = workFor(character);
+function destinationForPhase(
+  character: string,
+  phase?: DayPhase,
+  traits?: PlaceTraits | null,
+): Place {
+  const home = homeFor(character, traits);
+  const work = workFor(character, traits);
   const r = Math.random();
   switch (phase) {
     case 'night':
@@ -222,8 +240,9 @@ export function chooseDestination(
   width = MAP_WIDTH,
   height = MAP_HEIGHT,
   phase?: DayPhase,
+  traits?: PlaceTraits | null,
 ): { x: number; y: number } {
-  const target = destinationForPhase(character, phase);
+  const target = destinationForPhase(character, phase, traits);
   const jitter = () => Math.round((Math.random() - 0.5) * 2 * target.radius);
   return {
     x: clamp(target.x + jitter(), 1, width - 2),
