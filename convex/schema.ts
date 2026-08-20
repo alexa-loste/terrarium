@@ -243,6 +243,63 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index('author', ['worldId', 'playerId']),
 
+  // ── Mortality & lineage (v3.0) ────────────────────────────────────────────────────────────
+  // The town used to be immortal and fixed at the 8 personas in data/characters.ts. These two
+  // tables are what let it turn over.
+  //
+  // WHY A SEPARATE TABLE RATHER THAN A FLAG ON playerDescriptions: that row is the de-facto town
+  // roster — civics, drives, goals, beliefs, mood and comms all enumerate it to mean "everyone".
+  // It is also engine-owned (written through Game.saveDiff), and deleting it breaks survivors'
+  // memory pipeline, which resolves a dead character's NAME through it (agent/memory.ts). So the
+  // description row must outlive the character, and aliveness has to be recorded beside it. Every
+  // roster enumerator filters on `lifecycle.status`; a dead character keeps their name and their
+  // memories, and stops voting in civic issues.
+  lifecycle: defineTable({
+    worldId: v.id('worlds'),
+    playerId,
+    playerName: v.string(),
+    status: v.union(v.literal('alive'), v.literal('dead')),
+    bornDay: v.number(), // world-day index; the original cast is born on day 0
+    // Per-agent, drawn with variance around the configured mean so a cohort seeded together does
+    // not die together. Death is a rising hazard near this, not a hard cutoff on it.
+    lifespanDays: v.number(),
+    // Childhood: before this world-day the character exists, moves and is visible, but holds no
+    // conversations. Cheap on the inference budget and true to life.
+    maturesDay: v.number(),
+    diedDay: v.optional(v.number()),
+    cause: v.optional(v.string()), // 'age' for now; 'starvation' once the economy pass lands
+    // Lineage. Absent for the founding cast, who have no parents.
+    parentA: v.optional(playerId),
+    parentB: v.optional(playerId),
+  })
+    .index('playerId', ['worldId', 'playerId'])
+    .index('status', ['worldId', 'status']),
+
+  // Per-agent traits that USED to be derived from the display name via lookup tables in data/
+  // (homeFor / workFor / jobFor / priorPole). Those tables only had entries for the 8 founding
+  // personas, so a character born at runtime with a novel name fell through every one of them and
+  // ended up with no home, no workplace, a stub job and no convictions — present, but not a
+  // person. This is the same shape driveProfiles already uses: seeded from the name table for the
+  // founding cast, read from the DB thereafter, and INHERITED (with variation) at birth.
+  agentTraits: defineTable({
+    worldId: v.id('worlds'),
+    playerId,
+    playerName: v.string(),
+    homePlaceId: v.optional(v.string()),
+    workplaceId: v.optional(v.string()),
+    job: v.optional(
+      v.object({
+        kind: v.union(v.literal('scheduled'), v.literal('deliverable')),
+        startHour: v.optional(v.number()),
+        endHour: v.optional(v.number()),
+        quota: v.optional(v.number()),
+        perDays: v.optional(v.number()),
+      }),
+    ),
+    poles: v.optional(v.record(v.string(), v.number())), // ChargedTopic -> Pole (-1 | 1)
+    updatedAt: v.number(),
+  }).index('playerId', ['worldId', 'playerId']),
+
   // Goals (v2.1): a two-tier ladder. One long-term aspiration per character (seeded from their
   // drives, a far world-day horizon) and a rolling set of short-term milestones beneath it, each
   // with a near deadline, set/refreshed during the nightly consolidation. Progress feeds mood —
