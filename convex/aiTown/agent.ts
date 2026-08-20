@@ -52,7 +52,24 @@ export class Agent {
   tick(game: Game, now: number) {
     const player = game.world.players.get(this.playerId);
     if (!player) {
-      throw new Error(`Invalid player ID ${this.playerId}`);
+      // An agent whose player is gone is an ORPHAN. This used to throw, and the throw was
+      // engine-FATAL rather than merely noisy: Game.tick's agent loop runs inside
+      // AbstractGame.runStep OUTSIDE the try/catch that guards handleInput
+      // (engine/abstractGame.ts), so the exception escaped before saveStep. Nothing committed —
+      // not the player removal, not processedInputNumber, not the input's return value. The
+      // cron then restarted the "dead" world, replayed the same unconsumed input, and crashed
+      // again: a permanent loop in which the player never actually dies.
+      //
+      // Upstream AI Town never reached this because it only removes HUMAN players, who by
+      // construction have no agent record. A death mechanic removes agent-backed players, so
+      // this stops being unreachable the moment mortality ships.
+      //
+      // Self-heal instead of throwing. Deleting the current key while iterating a Map is
+      // well-defined in JS. The death input handler removes both records together; this is the
+      // backstop for a partial removal, not the mechanism.
+      console.warn(`Agent ${this.id}: player ${this.playerId} is gone; removing orphaned agent.`);
+      game.world.agents.delete(this.id);
+      return;
     }
     if (this.inProgressOperation) {
       if (now < this.inProgressOperation.started + ACTION_TIMEOUT) {

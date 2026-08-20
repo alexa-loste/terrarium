@@ -29,12 +29,28 @@ const TablesToVacuum: TableNames[] = [
   // the beginning of time
   'inputs',
 
-  // We can keep memories without their embeddings for inspection, but we won't
-  // retrieve them when searching memories via vector search.
-  'memories',
-  // We can vacuum fewer tables without serious consequences, but the only
-  // one that will cause issues over time is having >>100k vectors.
-  'memoryEmbeddings',
+  // ⛔ 'memories' and 'memoryEmbeddings' were HERE and have been removed deliberately.
+  //
+  // Two reasons, and the second one applies whether or not mortality ever ships.
+  //
+  // (1) Memory has to outlive the agent. Death keeps a character's memories in the vector
+  //     store so survivors can still recall the dead. A daily sweep deleting anything older
+  //     than VACUUM_MAX_AGE (2 weeks) made that promise false on a two-week timer — and it was
+  //     already quietly capping every LIVING agent's long-term memory at a fortnight, which is
+  //     almost certainly not what anyone intended.
+  //
+  // (2) The pair is not vacuumed atomically. These are two independent table sweeps, each
+  //     batch-limited. Delete a `memories` row while its `memoryEmbeddings` row survives and
+  //     the next vector search for that player hits
+  //     `throw new Error('Memory for embedding ... not found')` in rankAndTouchMemories
+  //     (convex/agent/memory.ts) — one half-swept pair poisons every subsequent search for
+  //     that character. That hazard predates this change.
+  //
+  // COST, stated plainly: vectors now grow without bound. The upstream comment warned that
+  // >>100k vectors degrade search, and nothing here replaces that pressure valve. The right
+  // fix when it starts to bite is importance-based pruning (drop low-importance memories,
+  // keep reflections and high-importance ones) deleting BOTH rows together — not an age
+  // sweep, which throws away exactly the old memories that make a long-lived town interesting.
 
   // v2.8 — append-only DISPLAY logs that grow unbounded and nothing reads past ~2 weeks (the
   // chronicle, the gossip ticker, the feed). Their downstream effects (relationship nudges,
