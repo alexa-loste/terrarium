@@ -1,6 +1,14 @@
 import { v } from 'convex/values';
 import { mutation, query, internalQuery } from './_generated/server';
-import { WorldClock, WorldTime, worldTime, SPEED_OPTIONS, WORLD_DAY_MS } from '../data/clock';
+import {
+  WorldClock,
+  WorldTime,
+  worldTime,
+  effectiveClock,
+  reanchor,
+  SPEED_OPTIONS,
+  WORLD_DAY_MS,
+} from '../data/clock';
 
 // Terrarium v1.3 — the anchored world clock (see data/clock.ts for the time math).
 //
@@ -35,8 +43,12 @@ async function readClock(ctx: any, worldId: string): Promise<StoredClock> {
 
 // While frozen, world-time stands still at the anchor — speed 0 makes worldTime() ignore
 // elapsed real time. Used by both getClock and currentTime, and mirrored on the frontend.
+//
+// The WRITERS below re-anchor through data/clock.ts `reanchor`, which asks the same question of
+// the same function. That shared definition is the point: when only the readers knew that frozen
+// means speed 0, freeze and unfreeze quietly invented and destroyed world-days.
 function effective(clock: StoredClock): WorldClock {
-  return clock.frozen ? { ...clock, speed: 0 } : clock;
+  return effectiveClock(clock, clock.frozen);
 }
 
 // Pin a Day-1 08:00 anchor the first time the world runs. Idempotent: a no-op once a row
@@ -58,14 +70,17 @@ export async function freezeClock(ctx: any, worldId: string): Promise<void> {
     .withIndex('worldId', (q: any) => q.eq('worldId', worldId))
     .first();
   const now = Date.now();
-  const cur = row
+  const cur: WorldClock = row
     ? { epochRealMs: row.epochRealMs, epochWorldMs: row.epochWorldMs, speed: row.speed }
     : DEFAULT_CLOCK(now);
-  const epochWorldMs = cur.epochWorldMs + (now - cur.epochRealMs) * cur.speed;
+  // Re-anchor at the position the clock is ACTUALLY at. Freezing an already-frozen clock must be a
+  // no-op, and before `reanchor` it was not: it added the whole frozen interval at the stored
+  // speed, so every extra freeze conjured days nobody simulated.
+  const next = reanchor(cur, !!row?.frozen, now);
   if (row) {
-    await ctx.db.patch(row._id, { epochRealMs: now, epochWorldMs, frozen: true });
+    await ctx.db.patch(row._id, { ...next, frozen: true });
   } else {
-    await ctx.db.insert('worldClock', { worldId, ...cur, epochRealMs: now, epochWorldMs, frozen: true });
+    await ctx.db.insert('worldClock', { worldId, ...next, frozen: true });
   }
 }
 
@@ -79,7 +94,19 @@ export async function unfreezeClock(ctx: any, worldId: string): Promise<void> {
     await ctx.db.insert('worldClock', { worldId, ...DEFAULT_CLOCK(Date.now()), frozen: false });
     return;
   }
-  await ctx.db.patch(row._id, { epochRealMs: Date.now(), frozen: false });
+  // Resuming must never move the world, in EITHER direction.
+  //
+  // This used to patch `epochRealMs: Date.now()` and leave epochWorldMs alone. On a genuinely
+  // frozen clock that is right. On a clock that was still RUNNING it silently threw away every
+  // world-day earned since the last anchor — and it is reachable, because status and frozen are
+  // separate state: a world already 'inactive' when the freeze fix shipped kept a running clock,
+  // so the next page view resumed it by deleting the days it had accrued.
+  const cur: WorldClock = {
+    epochRealMs: row.epochRealMs,
+    epochWorldMs: row.epochWorldMs,
+    speed: row.speed,
+  };
+  await ctx.db.patch(row._id, { ...reanchor(cur, !!row.frozen, Date.now()), frozen: false });
 }
 
 // v2.10 — NIGHT FAST-FORWARD. When every agent is asleep, no decisions happen — it's dead
@@ -114,9 +141,14 @@ export async function reconcileNightSpeed(ctx: any, worldId: string): Promise<vo
   const desired = allAsleep ? NIGHT_SPEED : DAY_SPEED;
   if (clockRow.speed === desired) return;
   // Re-anchor at the current world position so the displayed time is continuous, then switch.
-  const now = Date.now();
-  const epochWorldMs = clockRow.epochWorldMs + (now - clockRow.epochRealMs) * clockRow.speed;
-  await ctx.db.patch(clockRow._id, { epochRealMs: now, epochWorldMs, speed: desired });
+  // (This path already returns early on a frozen clock; it re-anchors through the shared helper so
+  // there is one definition of "where is this clock now" rather than four copies of the arithmetic.)
+  const cur: WorldClock = {
+    epochRealMs: clockRow.epochRealMs,
+    epochWorldMs: clockRow.epochWorldMs,
+    speed: clockRow.speed,
+  };
+  await ctx.db.patch(clockRow._id, { ...reanchor(cur, false, Date.now()), speed: desired });
 }
 
 // Current clock + the world time it implies right now. Read by the frontend and by agents.
@@ -159,12 +191,13 @@ export const setSpeed = mutation({
       .query('worldClock')
       .withIndex('worldId', (q) => q.eq('worldId', args.worldId))
       .unique();
-    const current = existing
+    const current: WorldClock = existing
       ? { epochRealMs: existing.epochRealMs, epochWorldMs: existing.epochWorldMs, speed: existing.speed }
       : DEFAULT_CLOCK(now);
-    // Re-anchor at the current world position, then switch speed.
-    const epochWorldMs = current.epochWorldMs + (now - current.epochRealMs) * current.speed;
-    const next = { worldId: args.worldId, epochRealMs: now, epochWorldMs, speed: args.speed };
+    // Re-anchor at the current world position, then switch speed. Changing speed on a FROZEN clock
+    // must not advance it — the stored speed is what it will resume at, not what it is running at.
+    const anchored = reanchor(current, !!existing?.frozen, now);
+    const next = { worldId: args.worldId, ...anchored, speed: args.speed };
     if (existing) {
       await ctx.db.patch(existing._id, next);
     } else {

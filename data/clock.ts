@@ -40,6 +40,45 @@ export function worldMsAt(clock: WorldClock, nowReal: number): number {
   return Math.max(0, clock.epochWorldMs + (nowReal - clock.epochRealMs) * clock.speed);
 }
 
+// ── Freezing, and the one rule that keeps it honest ─────────────────────────────────────────────
+
+// A clock's EFFECTIVE speed. A frozen clock advances at 0 no matter what `speed` says — the stored
+// speed is the speed it will RESUME at, remembered, not applied.
+//
+// Every READER already knew this (convex/clock.ts `effective`, and the frontend mirrors it). The
+// WRITERS did not: freeze/unfreeze/setSpeed each re-anchored using `clock.speed` directly, so the
+// two halves of the system disagreed about how fast a frozen clock runs. Two definitions of one
+// question, and they only differ while frozen — which is exactly when nobody is watching.
+export function effectiveSpeed(clock: WorldClock, frozen: boolean): number {
+  return frozen ? 0 : clock.speed;
+}
+
+// Move the anchor to `nowReal` WITHOUT moving the world.
+//
+// This is the only correct way to rewrite an anchor, and both directions of the bug it fixes were
+// live:
+//   - unfreezing a clock that was NOT frozen used to set epochRealMs = now and leave epochWorldMs
+//     alone, DISCARDING every world-day earned since the last anchor. alexa's town lost 21 days
+//     this way (day 447 -> 426, every character 21 years younger).
+//   - freezing a clock that was ALREADY frozen used to add the frozen interval at the stored
+//     speed, INVENTING world-days that nobody ticked.
+//
+// Both vanish if the elapsed term is computed at the effective speed, so a frozen clock earns
+// exactly zero and a running clock keeps exactly what it ran.
+export function reanchor(clock: WorldClock, frozen: boolean, nowReal: number): WorldClock {
+  const elapsed = (nowReal - clock.epochRealMs) * effectiveSpeed(clock, frozen);
+  return {
+    epochRealMs: nowReal,
+    epochWorldMs: Math.max(0, clock.epochWorldMs + elapsed),
+    speed: clock.speed,
+  };
+}
+
+// What the READERS see: the clock as it actually advances right now.
+export function effectiveClock(clock: WorldClock, frozen: boolean): WorldClock {
+  return { ...clock, speed: effectiveSpeed(clock, frozen) };
+}
+
 export function phaseForHour(hour: number): Phase {
   if (hour < 6 || hour >= 22) return 'night';
   if (hour < 9) return 'morning';
