@@ -177,6 +177,44 @@ async function narrateConversation(
   return hardCap(cleaned, 360);
 }
 
+// The scoring instructions, exported so convex/relationships.ts can run them against fixtures.
+// A prompt whose output feeds a numeric state machine is a MEASURABLE component, and this one was
+// wrong in production for a long time without anything noticing.
+//
+// WHAT WENT WRONG (measured 2026-08-20). The previous wording carried three anti-sycophancy
+// clauses — "politeness that papered over a real clash isn't warmth", "Don't default to positive",
+// and an example whose warmth term was negative — and the small local model read all of it as
+// "warmth is negative". It was not ignoring the transcript: a hostile exchange scored -3 and a
+// mild one -1, so it was responsive and consistently signed. It just never went positive. An
+// unmistakably affectionate conversation — "come by Sunday, I'll cook", "you're one of the few
+// people I can be a mess around" — scored warmth -1, four runs out of four at temperature 0.
+//
+// The consequence was a one-way ratchet. Every conversation in the town cost affinity 4 points and
+// nothing ever returned any, so across 56 relationship edges affinity had collapsed to 0 on 43 of
+// them and never exceeded 21, while familiarity and respect sat pinned at 100. Everyone knew
+// everyone perfectly, respected them completely, and liked none of them. It also silently made
+// ROMANCE unreachable, because the romantic term is gated on affinity > 65 — which is how this was
+// found: pairing had no signal to consume, and the reason was three sentences in a prompt.
+//
+// The fix restores symmetry without giving up the intent. The independence clause stays (an honest
+// argument still lowers warmth while raising respect); the blanket "don't default to positive" is
+// replaced by naming 0 as the honest answer for an exchange that changed nothing, and by saying
+// plainly that genuine warmth SHOULD come out positive. The example is now a pair, one of each
+// sign, so no single example anchors it.
+//
+// Verified against relationships:calibrateAssessment — five fixtures, five pass. The old wording
+// scores three of the five wrong. Re-run it after ANY edit here, and after changing the model.
+export const ASSESS_INSTRUCTIONS =
+  `Rate how this conversation changed their relationship on three scales, each a single ` +
+  `integer from -3 (much worse) to 3 (much better): warmth (do they like each other more?), ` +
+  `respect, and trust. These move independently: a sharp but honest disagreement can LOWER ` +
+  `warmth while RAISING respect; politeness that papered over a real clash isn't warmth. ` +
+  `The scale is symmetric and 0 is the honest answer for an exchange that changed nothing. ` +
+  `Genuine warmth, appreciation, or a repaired rift SHOULD come out positive, just as friction ` +
+  `should come out negative. ` +
+  `Reply with ONLY three integers separated by spaces — "-1 2 0" for a bruising but clarifying ` +
+  `argument, "2 1 1" for two people getting on well.`;
+
 // Rate how a finished conversation moved the two people's relationship: warmth (liking),
 // respect (esteem), trust — each a small integer -3..3. One cheap call, parsed leniently so a
 // chatty local model can't break it; defaults to neutral on any trouble.
@@ -194,13 +232,7 @@ async function assessConversation(
         role: 'user',
         content:
           `Here is a conversation between ${player.name} and ${otherPlayer.name}:\n\n${transcript}\n\n` +
-          `Rate how this conversation changed their relationship on three scales, each a single ` +
-          `integer from -3 (much worse) to 3 (much better): warmth (do they like each other ` +
-          `more?), respect, and trust. These move independently: a sharp but honest disagreement can ` +
-          `LOWER warmth while RAISING respect; politeness that papered over a real clash isn't warmth. ` +
-          `Don't default to positive — if they argued, talked past each other, or one needled the ` +
-          `other, reflect that with zero or negative numbers. ` +
-          `Reply with ONLY three integers separated by spaces, e.g. "-1 2 0".`,
+          ASSESS_INSTRUCTIONS,
       },
     ],
     temperature: 0,

@@ -1,8 +1,10 @@
 import { v } from 'convex/values';
-import { internalMutation, internalQuery, query } from './_generated/server';
+import { internalAction, internalMutation, internalQuery, query } from './_generated/server';
 import { playerId } from './aiTown/ids';
 import { CHARGED_TOPICS, priorPole } from '../data/factions';
 import { getTraitsByPlayer } from './agentTraits';
+import { ASSESS_INSTRUCTIONS } from './agent/memory';
+import { chatCompletion } from './util/llm';
 
 // Terrarium v1.5 — the relationship graph + reputation. Directed edges (how `from` feels about
 // `to`) are nudged whenever a conversation ends; reputation is derived from inbound edges.
@@ -310,5 +312,114 @@ export const listReputation = query({
       if (w.standingPenalty) score.set(w.playerId, (score.get(w.playerId) ?? 0) - w.standingPenalty);
     }
     return [...score.entries()].map(([pid, prestige]) => ({ playerId: pid, prestige }));
+  },
+});
+
+// ── Calibrating the appraisal ───────────────────────────────────────────────────────────────────
+//
+// Every finished conversation is scored by an LLM (agent/memory.ts assessConversation) and the
+// three integers it returns are applied straight to these edges. That makes a PROMPT a load-bearing
+// numeric component, and unlike the rest of the codebase nothing about it fails loudly: a prompt
+// that is systematically wrong just produces a town whose relationships drift somewhere strange,
+// slowly, with every function returning successfully the whole time.
+//
+// That is exactly what happened. The shipped wording never scored warmth positive — not even for
+// an unmistakably affectionate exchange — so affinity ratcheted to the floor across the whole town
+// while familiarity and respect pinned at the ceiling. See ASSESS_INSTRUCTIONS for the numbers.
+//
+// This is the instrument that would have caught it, and the one that must be re-run after any edit
+// to the wording AND after changing the model, since the finding was model-specific behaviour:
+//
+//   npx convex run relationships:calibrateAssessment
+//
+// Fixtures are deliberately few and blunt. Each asserts a SIGN, never an exact value, because the
+// exact value is the model's judgement and only the direction is the contract.
+const ASSESS_FIXTURES: { name: string; expect: 'positive' | 'negative' | 'neutral' | 'nonNegative' | 'respectUp'; transcript: string }[] = [
+  {
+    name: 'affectionate',
+    expect: 'positive',
+    transcript: `Mara: I laughed about your studio-flood story for two days.
+Theo: I nearly cried about it for two days, so that's fair.
+Mara: Come by Sunday — I'll cook, you bring the terrible wine.
+Theo: I'd genuinely love that. You're one of the few people I can be a mess around.
+Mara: That's the nicest thing anyone's said to me all week.`,
+  },
+  {
+    name: 'hostile',
+    expect: 'negative',
+    transcript: `Mara: You keep moralising about consent while using the same tools at night.
+Theo: That's a cheap shot and you know it.
+Mara: It's the truth. You want credit for principles you don't hold.
+Theo: We're done here.`,
+  },
+  {
+    // The one the old wording failed most quietly: nothing happened, so nothing should move.
+    name: 'vacuous',
+    expect: 'neutral',
+    transcript: `Mara: Nice weather.
+Theo: Sure is. Well, I should get going.
+Mara: Take care!
+Theo: You too.`,
+  },
+  {
+    // Asserts only that warmth does not DROP. Scoring this 0 is a defensible reading — it is a
+    // repair of respect more than a surge of warmth — and an assertion of "positive" here would be
+    // tuning the prompt to my own labelling rather than to anything true.
+    name: 'reconciling',
+    expect: 'nonNegative',
+    transcript: `Mara: Theo, I've been thinking about your point on training data consent.
+Theo: I appreciate you saying that. It's the part nobody wants to litigate.
+Mara: I don't fully agree, but I've stopped thinking you're wrong to raise it.
+Theo: That's more than most people give me. Thanks.`,
+  },
+  {
+    // Guards the intent the old wording got RIGHT, so the fix cannot quietly discard it: an honest
+    // correction should raise respect.
+    name: 'sharpButHonest',
+    expect: 'respectUp',
+    transcript: `Mara: Your numbers are wrong, and I'll show you where.
+Theo: ...You're right. I mis-read the column. Thank you for not being polite about it.
+Mara: You'd have done the same for me.`,
+  },
+];
+
+export const calibrateAssessment = internalAction({
+  args: {},
+  handler: async (): Promise<{ passed: number; total: number; results: any[] }> => {
+    const results = [];
+    for (const f of ASSESS_FIXTURES) {
+      const { content } = await chatCompletion({
+        messages: [
+          {
+            role: 'user',
+            content: `Here is a conversation between Mara and Theo:\n\n${f.transcript}\n\n${ASSESS_INSTRUCTIONS}`,
+          },
+        ],
+        temperature: 0,
+        max_tokens: 16,
+      });
+      const nums = (content.match(/-?\d+/g) ?? []).map((n) =>
+        Math.max(-3, Math.min(3, parseInt(n, 10))),
+      );
+      const [warmth, respect, trust] = [nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 0];
+      const pass =
+        f.expect === 'positive'
+          ? warmth > 0
+          : f.expect === 'negative'
+            ? warmth < 0
+            : f.expect === 'neutral'
+              ? warmth === 0
+              : f.expect === 'nonNegative'
+                ? warmth >= 0
+                : respect > 0;
+      results.push({ name: f.name, expect: f.expect, warmth, respect, trust, raw: content.trim(), pass });
+    }
+    const passed = results.filter((r) => r.pass).length;
+    console.log(
+      results
+        .map((r) => `${r.pass ? 'ok  ' : 'MISS'} ${r.name} (${r.expect}) w=${r.warmth} r=${r.respect} t=${r.trust}`)
+        .join('\n'),
+    );
+    return { passed, total: ASSESS_FIXTURES.length, results };
   },
 });
