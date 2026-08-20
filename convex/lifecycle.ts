@@ -3,12 +3,15 @@ import { internalMutation, mutation, query, QueryCtx } from './_generated/server
 import { Doc, Id } from './_generated/dataModel';
 import { playerId } from './aiTown/ids';
 import { worldTimeNow } from './clock';
+import { insertInput } from './aiTown/insertInput';
 import {
   FOUNDING_AGES,
   LifeStage,
   MATURITY_AGE,
   ageOn,
   bornDayForAge,
+  deathNotice,
+  diesOfAgeOn,
   drawLifespan,
   seedLifespanFor,
   stageFor,
@@ -25,8 +28,9 @@ import {
 //   • the reads: one character's row, the whole roster, and the DEAD set that roster
 //     enumerators filter on
 //
-// WHAT THIS DOES NOT DO YET: nothing here kills anybody. `deathHazard` is defined and tested in
-// the pure module and is not called from this file. Aging is live; mortality is the next step.
+// Death by OLD AGE only. Starvation is deliberately not wired: agents hold 126-4078 money against
+// a 4-16 meal, so hunger provably cannot bite until the economy is tightened. That was measured,
+// not assumed, and it is alexa's call when to change it.
 
 // ── Reads ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -156,18 +160,18 @@ export const seedLifecycleForWorld = mutation({
 
 // ── The daily pass ──────────────────────────────────────────────────────────────────────────────
 
-// Recompute every living character's stage for `day`. Called once per world-day from the night
-// tick of whichever agent reaches the new day first (convex/aiTown/agentOperations.ts); the rest
-// find it already done.
+// The one world-day pass: everyone ages, some cross into a new stage, and some die of old age.
+// Called once per world-day from the night tick of whichever agent reaches the new day first
+// (convex/aiTown/agentOperations.ts); the rest find it already done.
 //
 // Idempotent on `lastAgedDay`, and that guard is per-row rather than a single world-level marker on
 // purpose — a character seeded mid-day, or born mid-day, joins the pass on their own schedule
-// instead of being skipped until the next one.
+// instead of being skipped until the next one. It is also what makes the death roll happen exactly
+// ONCE per character per day: a second call the same day rolls for nobody.
 //
-// There is nothing to increment. Age is derived from bornDay, so this pass only writes when a
-// STAGE actually changes; on an ordinary day it does one cheap read per character and no writes
-// beyond the day marker.
-export const ageWorld = internalMutation({
+// Aging itself writes almost nothing. Age is derived from bornDay, so on an ordinary day this does
+// one cheap read per character, one day marker, and no more.
+export const dailyLifecycle = internalMutation({
   args: { worldId: v.id('worlds'), day: v.number() },
   handler: async (ctx, args) => {
     const rows = await ctx.db
@@ -176,6 +180,7 @@ export const ageWorld = internalMutation({
       .collect();
 
     const transitions: { name: string; from: LifeStage; to: LifeStage; age: number }[] = [];
+    const deaths: { name: string; age: number }[] = [];
     let aged = 0;
     for (const row of rows) {
       if (row.lastAgedDay === args.day) continue; // already run for this day
@@ -190,9 +195,29 @@ export const ageWorld = internalMutation({
         if (note) patch.pendingStageNote = note;
         transitions.push({ name: row.playerName, from, to, age });
       }
+
+      // The death roll. Zero hazard for the whole of an ordinary life, so this is a no-op for
+      // almost everyone almost every day; it only bites inside ELDER_WINDOW, and it is the same
+      // threshold that put them in the `elder` stage above — a character can never die on a day
+      // they could not already feel coming.
+      if (diesOfAgeOn(age, row.lifespanDays, Math.random())) {
+        await kill(ctx, args.worldId, row, args.day, age, 'age');
+        deaths.push({ name: row.playerName, age });
+        aged++;
+        continue; // the row is written by `kill`; don't also write the alive patch over it
+      }
+
       await ctx.db.patch(row._id, patch);
       aged++;
     }
+
+    // A character marked dead whose player is somehow still in the world gets another `die`.
+    // The two writes are not one transaction — the row is patched here, the world is changed by an
+    // input the engine applies later — so a lost input would otherwise leave a dead person walking
+    // around forever. `die` is idempotent, and the window is bounded so this doesn't grow into a
+    // daily broadcast about everyone who has ever died.
+    const reswept = await resweepRecentDead(ctx, args.worldId, args.day);
+
     if (transitions.length) {
       console.log(
         `Day ${args.day}: ${transitions
@@ -200,7 +225,12 @@ export const ageWorld = internalMutation({
           .join(', ')}`,
       );
     }
-    return { aged, transitions };
+    if (deaths.length) {
+      console.warn(
+        `Day ${args.day}: ${deaths.map((d) => deathNotice(d.name, d.age)).join(' ')}`,
+      );
+    }
+    return { aged, transitions, deaths, reswept };
   },
 });
 
@@ -216,5 +246,92 @@ export const takeStageNote = internalMutation({
     const note = row.pendingStageNote;
     await ctx.db.patch(row._id, { pendingStageNote: undefined });
     return note;
+  },
+});
+
+// ── Dying ───────────────────────────────────────────────────────────────────────────────────────
+
+// How many world-days after a death we keep re-sending `die` for a row whose player is somehow
+// still present. Long enough to survive a lost input, short enough that it never becomes a daily
+// announcement about the whole graveyard.
+const RESWEEP_DAYS = 3;
+
+// Mark a character dead and ask the engine to remove them.
+//
+// The ORDER matters and it is deliberate. The row is marked dead FIRST, in this transaction, and
+// the `die` input is queued for the engine to apply on a later tick. Those cannot be made atomic —
+// the world document is owned by the engine and rewritten wholesale by `saveWorld`, so writing to
+// it from here would be clobbered. Marking first means the worst case is a character recorded as
+// dead who is briefly still standing there, which `resweepRecentDead` fixes. Queueing first would
+// give the opposite and much worse failure: someone removed from the world with no record of
+// having died, no cause, and no age — unrecoverable, because the evidence left with them.
+//
+// What deliberately SURVIVES: their playerDescription (survivors' memory pipeline resolves a dead
+// character's name through it), and every memory they ever formed. See aiTown/lifeInputs.ts.
+async function kill(
+  ctx: any,
+  worldId: Id<'worlds'>,
+  row: Doc<'lifecycle'>,
+  day: number,
+  age: number,
+  cause: string,
+): Promise<void> {
+  await ctx.db.patch(row._id, {
+    status: 'dead',
+    diedDay: day,
+    cause,
+    lastAgedDay: day,
+    // Nobody collects a stage note after dying, and leaving one set would strand it forever.
+    pendingStageNote: undefined,
+  });
+  await ctx.db.insert('townEvents', {
+    worldId,
+    ts: Date.now(),
+    kind: 'system',
+    summary: deathNotice(row.playerName, age),
+    playerId: row.playerId,
+    playerName: row.playerName,
+    emoji: '🕯️',
+  });
+  await insertInput(ctx, worldId, 'die', { playerId: row.playerId });
+}
+
+async function resweepRecentDead(
+  ctx: any,
+  worldId: Id<'worlds'>,
+  day: number,
+): Promise<number> {
+  const dead = await ctx.db
+    .query('lifecycle')
+    .withIndex('status', (q: any) => q.eq('worldId', worldId).eq('status', 'dead'))
+    .collect();
+  let sent = 0;
+  for (const row of dead as Doc<'lifecycle'>[]) {
+    if (row.diedDay === undefined || day - row.diedDay > RESWEEP_DAYS) continue;
+    if (row.diedDay === day) continue; // just killed above; the first input is still in flight
+    await insertInput(ctx, worldId, 'die', { playerId: row.playerId });
+    sent++;
+  }
+  return sent;
+}
+
+// Kill a named character right now, for watching the mechanic work without waiting out a lifespan.
+// Real deaths come from the daily roll; this is the same code path, so what you see here is what
+// happens on its own.
+//
+//   npx convex run lifecycle:forceDeath '{"worldId":"...","name":"Russ"}'
+export const forceDeath = internalMutation({
+  args: { worldId: v.id('worlds'), name: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query('lifecycle')
+      .withIndex('status', (q) => q.eq('worldId', args.worldId).eq('status', 'alive'))
+      .collect();
+    const row = rows.find((r) => r.playerName === args.name);
+    if (!row) return { killed: null, reason: `no living character named ${args.name}` };
+    const { day } = await worldTimeNow(ctx, args.worldId);
+    const age = ageOn(day, row.bornDay);
+    await kill(ctx, args.worldId, row, day, age, 'age');
+    return { killed: row.playerName, age, day };
   },
 });

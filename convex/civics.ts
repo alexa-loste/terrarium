@@ -17,17 +17,29 @@ import {
 import { areRivals, priorPole } from '../data/factions';
 import { costOfLivingFor } from '../data/economy';
 import { getTraitsByPlayer } from './agentTraits';
+import { deadPlayerIds } from './lifecycle';
 
 // Terrarium v2.6 — CIVIC OUTCOMES storage + resolution. The thin Convex layer; the dynamics
 // (stance derivation, persuasion, tally) are pure in data/civics.ts.
 
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
 
+// Everyone in town who is ALIVE. This is the one roster enumerator in the codebase where that
+// distinction is load-bearing: `cast` decides who takes a stance on a new civic issue and who
+// feels the material effect when one passes, and the dead should do neither.
+//
+// The other ~13 playerDescriptions lookups are single-player name resolutions and MUST keep
+// returning the dead — the survivors' memory pipeline resolves a dead character's name through
+// exactly those. The remaining `.collect()` sites are one-shot seeders and the engine's world
+// load, where filtering would be wrong or pointless. That was checked site by site rather than
+// swept, because a name that stops resolving breaks the living, not the dead.
 async function cast(ctx: any, worldId: Id<'worlds'>): Promise<Doc<'playerDescriptions'>[]> {
-  return await ctx.db
+  const all = await ctx.db
     .query('playerDescriptions')
     .withIndex('worldId', (q: any) => q.eq('worldId', worldId))
     .collect();
+  const dead = await deadPlayerIds(ctx, worldId);
+  return all.filter((d: Doc<'playerDescriptions'>) => !dead.has(String(d.playerId)));
 }
 
 async function activeIssueDoc(ctx: any, worldId: Id<'worlds'>): Promise<Doc<'civicIssues'> | null> {

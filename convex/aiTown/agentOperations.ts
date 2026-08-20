@@ -591,7 +591,7 @@ async function tickVitals(
         // The transition is collected separately and per-character, because the pass runs once for
         // the whole town while the journal entry has to be in this character's own voice. Nobody
         // dies here — mortality is not wired yet.
-        await ctx.runMutation(internal.lifecycle.ageWorld, {
+        await ctx.runMutation(internal.lifecycle.dailyLifecycle, {
           worldId: args.worldId,
           day: time.day,
         });

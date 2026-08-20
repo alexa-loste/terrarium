@@ -11,6 +11,8 @@ import {
   ageOn,
   bornDayForAge,
   deathHazard,
+  deathNotice,
+  diesOfAgeOn,
   drawLifespan,
   seedLifespanFor,
   stageFor,
@@ -238,5 +240,70 @@ describe('stageNote', () => {
 
   test('nobody transitions into childhood', () => {
     expect(stageNote('child', 0)).toBeNull();
+  });
+});
+
+// ── The death decision ──────────────────────────────────────────────────────────────────────────
+
+describe('diesOfAgeOn', () => {
+  const SPAN = 80;
+
+  test('no roll can kill a character who is not yet frail', () => {
+    // The property that matters most: a character can never die on a day they could not already
+    // feel coming. Zero hazard must mean zero deaths, INCLUDING on a roll of exactly 0 — which a
+    // `<=` comparison would have killed.
+    for (let age = 0; age <= SPAN - ELDER_WINDOW; age++) {
+      for (const roll of [0, 0.0001, 0.5, 0.9999]) {
+        expect([age, roll, diesOfAgeOn(age, SPAN, roll)]).toEqual([age, roll, false]);
+      }
+    }
+  });
+
+  test('the boundary is the hazard, exactly', () => {
+    const age = SPAN;
+    const h = deathHazard(age, SPAN);
+    expect(diesOfAgeOn(age, SPAN, h - 1e-9)).toBe(true);
+    expect(diesOfAgeOn(age, SPAN, h)).toBe(false); // strictly less-than
+    expect(diesOfAgeOn(age, SPAN, h + 1e-9)).toBe(false);
+  });
+
+  test('a character far past their span dies on any roll', () => {
+    for (const roll of [0, 0.5, 0.999999]) {
+      expect(diesOfAgeOn(SPAN + 6, SPAN, roll)).toBe(true);
+    }
+  });
+
+  test('dying and feeling old start on the same day', () => {
+    // Same assertion as the hazard test, but stated over the DECISION, because this is the pair a
+    // future retune could quietly break: shift one threshold and characters start dropping dead
+    // while still described to themselves as middle-aged.
+    for (let span = LIFESPAN_MIN; span <= LIFESPAN_MAX; span++) {
+      const onset = span - ELDER_WINDOW;
+      expect([span, diesOfAgeOn(onset - 1, span, 0)]).toEqual([span, false]);
+      expect([span, stageFor(onset, span)]).toEqual([span, 'elder']);
+    }
+  });
+
+  test('a whole cohort dies inside the window and none survive it', () => {
+    // Walks 500 characters through one day at a time from frailty onset and checks that every one
+    // of them is dead by span + ELDER_WINDOW. An immortal here would mean the town fills up with
+    // people who cannot die.
+    let maxAge = 0;
+    for (let i = 0; i < 500; i++) {
+      let age = SPAN - ELDER_WINDOW;
+      while (!diesOfAgeOn(age, SPAN, Math.random())) {
+        age++;
+        if (age > SPAN + ELDER_WINDOW) break;
+      }
+      maxAge = Math.max(maxAge, age);
+    }
+    expect(maxAge).toBeLessThanOrEqual(SPAN + 6);
+  });
+});
+
+describe('deathNotice', () => {
+  test('names the person and their age', () => {
+    expect(deathNotice('Russ', 78)).toContain('Russ');
+    expect(deathNotice('Russ', 78)).toContain('78');
   });
 });

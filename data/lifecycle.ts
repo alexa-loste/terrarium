@@ -149,3 +149,22 @@ export function stageNote(to: LifeStage, age: number): string | null {
       return null; // nobody transitions INTO childhood; they're born there
   }
 }
+
+// ── Death ───────────────────────────────────────────────────────────────────────────────────────
+
+// Does this character die of old age on this world-day? `roll` is a value in [0,1) supplied by the
+// caller rather than drawn here, so the decision is a pure function and the tests can pin the
+// boundary exactly instead of sampling and hoping.
+//
+// Strictly less-than, so a roll of 0 kills only where the hazard is genuinely positive — a
+// character with hazard 0 can never die, whatever the roll.
+export function diesOfAgeOn(age: number, lifespanDays: number, roll: number): boolean {
+  return roll < deathHazard(age, lifespanDays);
+}
+
+// The line recorded in the town chronicle. Deliberately plain: the character's own account of
+// dying is not this system's job, and inventing one here would put words in their mouth that
+// nothing in their history supports.
+export function deathNotice(name: string, age: number): string {
+  return `${name} died of old age, at ${age}.`;
+}
