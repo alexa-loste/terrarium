@@ -17,6 +17,17 @@ import { nearestPlace } from '../../data/places';
 import { timeOfDayPrompt, WorldTime } from '../../data/clock';
 import { planWhenLabel } from '../../data/plans';
 import { moodPromptLine } from '../../data/mood';
+import {
+  LifeStage,
+  ageOn,
+  identityAtAge,
+  identityStatesAge,
+  othersSeeStage,
+  stageFor,
+  stagePromptLine,
+} from '../../data/lifecycle';
+import { getLifecycle } from '../lifecycle';
+import { worldTimeNow } from '../clock';
 
 const selfInternal = internal.agent.conversation;
 
@@ -27,7 +38,7 @@ export async function startConversationMessage(
   playerId: GameId<'players'>,
   otherPlayerId: GameId<'players'>,
 ): Promise<string> {
-  const { player, otherPlayer, place, agent, otherAgent, lastConversation } = await ctx.runQuery(
+  const { player, otherPlayer, place, agent, otherAgent, lastConversation , life, otherLife } = await ctx.runQuery(
     selfInternal.queryPromptData,
     {
       worldId,
@@ -75,6 +86,7 @@ export async function startConversationMessage(
   ];
   if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
+  prompt.push(...agePrompt(life, agent?.identity, otherPlayer.name, otherLife));
   prompt.push(...relationshipPrompt(otherPlayer.name, edge));
   prompt.push(...beliefsPrompt(beliefs));
   prompt.push(...innerStatePrompt(innerState.vit, innerState.goals, innerState.drives, time.day));
@@ -157,7 +169,7 @@ export async function continueConversationMessage(
   playerId: GameId<'players'>,
   otherPlayerId: GameId<'players'>,
 ): Promise<string> {
-  const { player, otherPlayer, place, conversation, agent, otherAgent } = await ctx.runQuery(
+  const { player, otherPlayer, place, conversation, agent, otherAgent , life, otherLife } = await ctx.runQuery(
     selfInternal.queryPromptData,
     {
       worldId,
@@ -195,6 +207,7 @@ export async function continueConversationMessage(
   ];
   if (place) prompt.push(`You're at ${place}.`);
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
+  prompt.push(...agePrompt(life, agent?.identity, otherPlayer.name, otherLife));
   prompt.push(...relationshipPrompt(otherPlayer.name, edge));
   prompt.push(...beliefsPrompt(beliefs));
   prompt.push(...innerStatePrompt(innerState.vit, innerState.goals, innerState.drives, time.day));
@@ -236,7 +249,7 @@ export async function leaveConversationMessage(
   playerId: GameId<'players'>,
   otherPlayerId: GameId<'players'>,
 ): Promise<string> {
-  const { player, otherPlayer, conversation, agent, otherAgent } = await ctx.runQuery(
+  const { player, otherPlayer, conversation, agent, otherAgent , life, otherLife } = await ctx.runQuery(
     selfInternal.queryPromptData,
     {
       worldId,
@@ -250,6 +263,7 @@ export async function leaveConversationMessage(
     `You've decided to leave the question and would like to politely tell them you're leaving the conversation.`,
   ];
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
+  prompt.push(...agePrompt(life, agent?.identity, otherPlayer.name, otherLife));
   prompt.push(
     `Below is the current chat history between you and ${otherPlayer.name}.`,
     `How would you like to tell them that you're leaving? Your response should be brief and within 200 characters.`,
@@ -634,21 +648,83 @@ export const queryPromptData = internalQuery({
         throw new Error(`Conversation ${lastTogether.conversationId} not found`);
       }
     }
+    // Age, resolved HERE rather than in each prompt builder. Every builder consumes
+    // `agent.identity` through agentPrompts(), so keeping the age current at this one point makes
+    // it current in the conversation opener, the continuation, the goodbye and the journal alike —
+    // and there is no way for one of them to be left behind holding a stale number.
+    const { day } = await worldTimeNow(ctx, args.worldId);
+    const life = await ageContext(ctx, args.worldId, args.playerId, playerDescription.name, day);
+    const otherLife = await ageContext(
+      ctx,
+      args.worldId,
+      args.otherPlayerId,
+      otherPlayerDescription.name,
+      day,
+    );
+
     return {
       player: { name: playerDescription.name, ...player },
       otherPlayer: { name: otherPlayerDescription.name, ...otherPlayer },
       place: placeLabel(player, playerDescription.name),
       conversation,
-      agent: { identity: agentDescription.identity, plan: agentDescription.plan, ...agent },
+      agent: {
+        identity: life ? identityAtAge(agentDescription.identity, life.age) : agentDescription.identity,
+        plan: agentDescription.plan,
+        ...agent,
+      },
       otherAgent: otherAgent && {
-        identity: otherAgentDescription!.identity,
+        identity: otherLife
+          ? identityAtAge(otherAgentDescription!.identity, otherLife.age)
+          : otherAgentDescription!.identity,
         plan: otherAgentDescription!.plan,
         ...otherAgent,
       },
+      life,
+      otherLife,
       lastConversation,
     };
   },
 });
+
+// The age facts a prompt needs about one character. Null when they have no lifecycle row — an
+// un-seeded world then behaves exactly as it did before this existed, rather than asserting
+// everyone is zero.
+type AgeContext = { age: number; stage: LifeStage; lifespanDays: number };
+
+async function ageContext(
+  ctx: any,
+  worldId: any,
+  pid: string,
+  _name: string,
+  day: number,
+): Promise<AgeContext | null> {
+  const row = await getLifecycle(ctx, worldId, pid);
+  if (!row) return null;
+  const age = ageOn(row.diedDay ?? day, row.bornDay);
+  return { age, stage: stageFor(age, row.lifespanDays), lifespanDays: row.lifespanDays };
+}
+
+// How old they are and what that feels like. The age itself is normally carried INSIDE the
+// rewritten identity line (see data/lifecycle.ts), so this adds a bare age only for a character
+// whose bio never stated one — someone born at runtime.
+function agePrompt(
+  life: AgeContext | null,
+  identity: string | undefined,
+  otherName: string,
+  otherLife: AgeContext | null,
+): string[] {
+  const out: string[] = [];
+  if (life) {
+    if (identity && !identityStatesAge(identity)) out.push(`You are ${life.age} years old.`);
+    const line = stagePromptLine(life.stage, life.age, life.lifespanDays);
+    if (line) out.push(line);
+  }
+  if (otherLife) {
+    const seen = othersSeeStage(otherName, otherLife.stage, otherLife.age);
+    if (seen) out.push(seen);
+  }
+  return out;
+}
 
 function stopWords(otherPlayer: string, player: string) {
   // These are the words we ask the LLM to stop on. OpenAI only supports 4.

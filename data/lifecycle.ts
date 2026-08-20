@@ -168,3 +168,81 @@ export function diesOfAgeOn(age: number, lifespanDays: number, roll: number): bo
 export function deathNotice(name: string, age: number): string {
   return `${name} died of old age, at ${age}.`;
 }
+
+// ── Age in the prompt ───────────────────────────────────────────────────────────────────────────
+//
+// The founding bios state an age in the first person — "I'm Mara, 31, an indie founder…" — and
+// that text is read to the model as the character's own self-description on EVERY prompt. Once
+// Mara is 53 the sentence is simply false, and the obvious fix (append "You are 53") is worse
+// than the problem: the prompt would then assert two different ages a paragraph apart and leave
+// the model to pick one.
+//
+// So the age is kept current IN PLACE. There stays exactly ONE statement of how old someone is,
+// and it is always right. The prose alexa wrote is untouched on disk; only the number moves.
+
+// True when a bio states its own age, i.e. when the rewrite below has something to act on.
+export function identityStatesAge(identity: string): boolean {
+  return IDENTITY_AGE.test(identity);
+}
+
+// Non-global on purpose: a global regex carries `lastIndex` between calls and would silently skip
+// matches on alternate invocations.
+const IDENTITY_AGE = /(I'm\s+[A-Z][a-z]+,\s*)(\d+)\b/;
+
+// Rewrite the stated age to the current one. Unchanged when the bio states no age (a character
+// born at runtime), which `identityStatesAge` lets the caller detect and handle.
+//
+// The replacer function is for readability, not correctness. I assumed `"$1" + age` would break —
+// "$1" + 53 is the string "$153", which looks like a reference to capture group 153 — and wrote a
+// three-digit test to prove it. The test stayed green, so I checked directly: a group number
+// larger than the group count falls back to the single-digit reading, so "$153" resolves to group
+// 1 followed by "53" and the string form is in fact correct, three-digit ages included. Recorded
+// because the next person will have the same suspicion and can skip the detour.
+export function identityAtAge(identity: string, age: number): string {
+  return identity.replace(IDENTITY_AGE, (_match, lead: string) => `${lead}${age}`);
+}
+
+// What the character knows about their own body, beyond the number. Adults get nothing — their age
+// is already in their self-description and a healthy adult does not think about it daily.
+//
+// The elder line is graded by the SAME hazard that decides whether they die, so how strongly they
+// feel it and how likely they are to go are one quantity. alexa's decision was that agents are
+// aware they are dying; this is where that becomes true rather than stated. Deliberately no
+// numbers — a character who knows they have "about four years left" is reading their own row, and
+// nobody experiences mortality as a countdown.
+export function stagePromptLine(
+  stage: LifeStage,
+  age: number,
+  lifespanDays: number,
+): string | null {
+  if (stage === 'child') {
+    return `You are ${age} — still a child. You are around the adults but not one of them yet.`;
+  }
+  if (stage !== 'elder') return null;
+  const near = deathHazard(age, lifespanDays) / PEAK_HAZARD;
+  if (near >= 1) {
+    return (
+      `You are ${age}. You are at the very end of your life and you know it — not as a fear, ` +
+      `as a fact you have had time to get used to. Say the things that need saying.`
+    );
+  }
+  if (near >= 0.35) {
+    return (
+      `You are ${age}, and you are old. Your body reminds you of it daily and you have started ` +
+      `thinking about what you leave behind, and who you would want to say something to.`
+    );
+  }
+  return (
+    `You are ${age}. You have started to feel your age — slower, more tired, more aware that ` +
+    `the years ahead are fewer than the ones behind.`
+  );
+}
+
+// What OTHER people can see. Only the visible stages: a healthy adult's age is already carried by
+// their own self-description, so restating it here would be the same duplication this module
+// exists to avoid.
+export function othersSeeStage(name: string, stage: LifeStage, age: number): string | null {
+  if (stage === 'child') return `${name} is ${age} — a child.`;
+  if (stage === 'elder') return `${name} is ${age} now, and visibly old.`;
+  return null;
+}

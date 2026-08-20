@@ -14,9 +14,13 @@ import {
   deathNotice,
   diesOfAgeOn,
   drawLifespan,
+  identityAtAge,
+  identityStatesAge,
+  othersSeeStage,
   seedLifespanFor,
   stageFor,
   stageNote,
+  stagePromptLine,
 } from './lifecycle';
 
 // ── The drift guard ─────────────────────────────────────────────────────────────────────────────
@@ -305,5 +309,96 @@ describe('deathNotice', () => {
   test('names the person and their age', () => {
     expect(deathNotice('Russ', 78)).toContain('Russ');
     expect(deathNotice('Russ', 78)).toContain('78');
+  });
+});
+
+// ── Age in the prompt ───────────────────────────────────────────────────────────────────────────
+
+describe('identityAtAge', () => {
+  test('rewrites every founding bio to the current age', () => {
+    // The whole point: the bio is read to the model as self-description on every prompt, so after
+    // aging it must not still claim the age they started at.
+    for (const d of Descriptions) {
+      const out = identityAtAge(d.identity, 77);
+      expect([d.name, ageFromIdentity(out)]).toEqual([d.name, 77]);
+    }
+  });
+
+  test('leaves the rest of the prose byte-identical', () => {
+    // Guards against a regex that eats more than the number. alexa wrote this text; the only thing
+    // this function may touch is the digits.
+    for (const d of Descriptions) {
+      const original = FOUNDING_AGES[d.name];
+      expect(identityAtAge(identityAtAge(d.identity, 77), original)).toBe(d.identity);
+    }
+  });
+
+  test('handles a three-digit age', () => {
+    // A plain boundary case for the rewrite, and nothing more. It was written to catch a
+    // `"$1" + age` replacement-string hazard; planting that exact defect left the suite green,
+    // and checking directly showed the hazard is not real. Kept as a boundary test, with the
+    // claim it used to make removed.
+    expect(identityAtAge("I'm Mara, 31, an indie founder", 104)).toBe(
+      "I'm Mara, 104, an indie founder",
+    );
+    expect(identityAtAge("I'm Mara, 31, an indie founder", 53)).toBe(
+      "I'm Mara, 53, an indie founder",
+    );
+  });
+
+  test('is stable across repeated calls', () => {
+    // A global regex would carry lastIndex between calls and skip every second one.
+    const bio = "I'm Theo, 29, an illustrator";
+    for (let i = 0; i < 5; i++) expect(identityAtAge(bio, 60)).toBe("I'm Theo, 60, an illustrator");
+  });
+
+  test('a bio with no stated age is returned untouched and flagged', () => {
+    const bio = 'A quiet person who grew up here.';
+    expect(identityStatesAge(bio)).toBe(false);
+    expect(identityAtAge(bio, 40)).toBe(bio);
+    for (const d of Descriptions) expect(identityStatesAge(d.identity)).toBe(true);
+  });
+});
+
+describe('stagePromptLine', () => {
+  const SPAN = 80;
+
+  test('an adult is told nothing extra', () => {
+    // Their age already lives in the rewritten bio. A second statement is the duplication this
+    // whole design exists to avoid.
+    expect(stagePromptLine('adult', 40, SPAN)).toBeNull();
+  });
+
+  test('an elder is told, and the wording escalates as the hazard rises', () => {
+    const onset = SPAN - ELDER_WINDOW;
+    const early = stagePromptLine('elder', onset + 1, SPAN)!;
+    const late = stagePromptLine('elder', SPAN, SPAN)!;
+    const end = stagePromptLine('elder', SPAN + 6, SPAN)!;
+    expect(early).not.toBe(late);
+    expect(late).not.toBe(end);
+    // alexa's decision: agents ARE aware they are dying. The deepest line must say so.
+    expect(end.toLowerCase()).toContain('end of your life');
+  });
+
+  test('every elder line states the age and no line quotes a countdown', () => {
+    // A character who knows they have "4 years left" is reading their own database row.
+    for (let age = SPAN - ELDER_WINDOW; age <= SPAN + ELDER_WINDOW; age++) {
+      const line = stagePromptLine('elder', age, SPAN)!;
+      expect([age, line.includes(String(age))]).toEqual([age, true]);
+      expect([age, /years left|remaining|lifespan/i.test(line)]).toEqual([age, false]);
+    }
+  });
+
+  test('a child is told they are a child', () => {
+    expect(stagePromptLine('child', 8, SPAN)).toContain('child');
+  });
+});
+
+describe('othersSeeStage', () => {
+  test('only the visible stages are described to other people', () => {
+    expect(othersSeeStage('Russ', 'adult', 40)).toBeNull();
+    expect(othersSeeStage('Russ', 'elder', 78)).toContain('Russ');
+    expect(othersSeeStage('Russ', 'elder', 78)).toContain('78');
+    expect(othersSeeStage('Ada', 'child', 9)).toContain('child');
   });
 });
