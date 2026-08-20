@@ -246,3 +246,61 @@ export function othersSeeStage(name: string, stage: LifeStage, age: number): str
   if (stage === 'elder') return `${name} is ${age} now, and visibly old.`;
   return null;
 }
+
+// ── Being survived ──────────────────────────────────────────────────────────────────────────────
+//
+// When someone dies, everyone still alive forms a memory of it. That memory is the whole spreading
+// mechanism: it goes into the survivor's vector store like any other, so it surfaces in
+// conversation when it is relevant and they talk about it on their own. Nothing schedules a
+// mourning scene, and nothing tells anyone to bring it up.
+//
+// Deliberately NOT routed through `gossipEvents`. That table models "A told B about C" and nudges
+// how the listener feels about the subject — neither of which fits the moment of a death, which
+// has no teller and no one left to change their mind about. Death spreads because people who
+// remember it talk, which is the machinery that already exists.
+
+// How well the survivor knew them. `null` means no relationship row at all — they never met.
+export type Bond = { familiarity: number; affinity: number } | null;
+export type GriefBand = 'close' | 'known' | 'distant';
+
+// Thresholds chosen to match the vocabulary relationshipPrompt already uses on the same 0-100
+// scales (affinity >= 57 is "warm"), so "close" here means what "warm and familiar" means there
+// rather than inventing a second, quietly different idea of closeness.
+export function griefBandFor(bond: Bond): GriefBand {
+  if (!bond) return 'distant';
+  if (bond.familiarity < 25) return 'distant';
+  if (bond.familiarity >= 55 && bond.affinity >= 57) return 'close';
+  return 'known';
+}
+
+// The survivor's memory, in their own voice — this text is embedded and read back to them later,
+// so it is written the way a person would remember it, not the way a log would record it.
+//
+// They/them throughout: the bios never state anyone's pronouns, and guessing from a name would put
+// a wrong one into a memory that is then permanent.
+export function witnessMemory(name: string, age: number, band: GriefBand): string {
+  switch (band) {
+    case 'close':
+      return (
+        `${name} died today, of old age — ${age} years old. I knew them well. The town is ` +
+        `smaller without them and I keep expecting to see them.`
+      );
+    case 'known':
+      return (
+        `${name} died today, of old age. They were ${age}. I knew them — not closely, but they ` +
+        `were part of this place.`
+      );
+    case 'distant':
+      return (
+        `Word went round that ${name} died today, of old age, at ${age}. I didn't really know ` +
+        `them.`
+      );
+  }
+}
+
+// Where this sits against the importance scale already in use: a passing thought is 3, a journal
+// reflection 5, something they made 7. Losing someone close is above all of those; hearing that a
+// near-stranger died is a fact worth keeping and little more.
+export function witnessImportance(band: GriefBand): number {
+  return band === 'close' ? 9 : band === 'known' ? 6 : 4;
+}

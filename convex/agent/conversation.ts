@@ -26,8 +26,8 @@ import {
   stageFor,
   stagePromptLine,
 } from '../../data/lifecycle';
-import { getLifecycle } from '../lifecycle';
 import { worldTimeNow } from '../clock';
+import { getLifecycle } from '../lifecycle';
 
 const selfInternal = internal.agent.conversation;
 
@@ -653,14 +653,8 @@ export const queryPromptData = internalQuery({
     // it current in the conversation opener, the continuation, the goodbye and the journal alike —
     // and there is no way for one of them to be left behind holding a stale number.
     const { day } = await worldTimeNow(ctx, args.worldId);
-    const life = await ageContext(ctx, args.worldId, args.playerId, playerDescription.name, day);
-    const otherLife = await ageContext(
-      ctx,
-      args.worldId,
-      args.otherPlayerId,
-      otherPlayerDescription.name,
-      day,
-    );
+    const life = await ageContext(ctx, args.worldId, args.playerId, day);
+    const otherLife = await ageContext(ctx, args.worldId, args.otherPlayerId, day);
 
     return {
       player: { name: playerDescription.name, ...player },
@@ -695,7 +689,6 @@ async function ageContext(
   ctx: any,
   worldId: any,
   pid: string,
-  _name: string,
   day: number,
 ): Promise<AgeContext | null> {
   const row = await getLifecycle(ctx, worldId, pid);

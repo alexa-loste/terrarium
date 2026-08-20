@@ -1,9 +1,18 @@
 import { v } from 'convex/values';
-import { internalMutation, mutation, query, QueryCtx } from './_generated/server';
+import {
+  internalAction,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+  QueryCtx,
+} from './_generated/server';
 import { Doc, Id } from './_generated/dataModel';
 import { playerId } from './aiTown/ids';
 import { worldTimeNow } from './clock';
 import { insertInput } from './aiTown/insertInput';
+import { internal } from './_generated/api';
+import { fetchEmbedding } from './util/llm';
 import {
   FOUNDING_AGES,
   LifeStage,
@@ -12,6 +21,9 @@ import {
   bornDayForAge,
   deathNotice,
   diesOfAgeOn,
+  griefBandFor,
+  witnessImportance,
+  witnessMemory,
   drawLifespan,
   seedLifespanFor,
   stageFor,
@@ -294,6 +306,14 @@ async function kill(
     emoji: '🕯️',
   });
   await insertInput(ctx, worldId, 'die', { playerId: row.playerId });
+  // The survivors' half. Scheduled, not awaited: memories need embeddings, embeddings need an
+  // action, and this is a mutation.
+  await ctx.scheduler.runAfter(0, internal.lifecycle.recordWitnesses, {
+    worldId,
+    deceasedPlayerId: row.playerId,
+    deceasedName: row.playerName,
+    age,
+  });
 }
 
 async function resweepRecentDead(
@@ -333,5 +353,91 @@ export const forceDeath = internalMutation({
     const age = ageOn(day, row.bornDay);
     await kill(ctx, args.worldId, row, day, age, 'age');
     return { killed: row.playerName, age, day };
+  },
+});
+
+// Everyone still alive and still in the world, with the agent id their memories hang off.
+//
+// Reads the world document for the agent ids and `lifecycle` for aliveness, and requires BOTH:
+// the deceased's row is marked dead in the same transaction as the death, but the `die` input that
+// removes them from the world is applied by the engine on a later tick. For the moments in between
+// they are dead on paper and present in the world, and a survivor list built from either source
+// alone would include them in their own funeral.
+// Return type annotated deliberately — see the note on recordWitnesses below.
+export const survivorsFor = internalQuery({
+  args: { worldId: v.id('worlds'), excluding: playerId },
+  handler: async (ctx, args): Promise<{ playerId: string; agentId: string }[]> => {
+    const world = await ctx.db.get(args.worldId);
+    if (!world) return [];
+    const dead = await deadPlayerIds(ctx, args.worldId);
+    const out: { playerId: string; agentId: string }[] = [];
+    for (const agent of world.agents) {
+      const pid = String(agent.playerId);
+      if (pid === String(args.excluding) || dead.has(pid)) continue;
+      out.push({ playerId: pid, agentId: String(agent.id) });
+    }
+    return out;
+  },
+});
+
+// Give every survivor a memory of the death, weighted by how well they knew them.
+//
+// Scheduled from `kill` rather than done inline because a memory needs an EMBEDDING, which needs
+// an action, and `kill` runs inside a mutation. Best-effort per survivor: one failed embedding
+// must not cost the rest of the town their memory of the person.
+// The explicit return-type annotations on this action and on `survivorsFor` are LOad-BEARING, not
+// decoration. This module reaches for `internal` to schedule itself and to call
+// agent.memory.insertMemory, and the generated API type includes this module, so inference goes in
+// a circle. TypeScript resolves that by falling back to `any` — and the errors surface as six
+// implicit-any complaints in agent/memory.ts and agent/conversation.ts, files that have nothing to
+// do with it. Annotating the boundary stops the traversal.
+//
+// I first blamed the import in conversation.ts and rewrote it to read the table inline. That was
+// wrong: putting the import back once these annotations existed typechecks fine. The inline query
+// and its confident explanation are both reverted.
+export const recordWitnesses = internalAction({
+  args: {
+    worldId: v.id('worlds'),
+    deceasedPlayerId: playerId,
+    deceasedName: v.string(),
+    age: v.number(),
+  },
+  handler: async (ctx, args): Promise<{ recorded: number; survivors: number }> => {
+    const survivors: { playerId: string; agentId: string }[] = await ctx.runQuery(
+      internal.lifecycle.survivorsFor,
+      {
+        worldId: args.worldId,
+        excluding: args.deceasedPlayerId,
+      },
+    );
+    let recorded = 0;
+    for (const s of survivors) {
+      try {
+        const bond = await ctx.runQuery(internal.relationships.edgeFor, {
+          worldId: args.worldId,
+          fromPlayerId: s.playerId,
+          toPlayerId: args.deceasedPlayerId,
+        });
+        const band = griefBandFor(bond);
+        const description = witnessMemory(args.deceasedName, args.age, band);
+        const { embedding } = await fetchEmbedding(description);
+        await ctx.runMutation(internal.agent.memory.insertMemory, {
+          agentId: s.agentId,
+          playerId: s.playerId,
+          description,
+          importance: witnessImportance(band),
+          lastAccess: Date.now(),
+          // A memory ABOUT the deceased. The existing 'relationship' shape means exactly this, and
+          // it is what lets a survivor's recall surface them by name years later.
+          data: { type: 'relationship', playerId: args.deceasedPlayerId },
+          embedding,
+        });
+        recorded++;
+      } catch (e) {
+        console.error(`witness memory failed for ${s.playerId}`, e);
+      }
+    }
+    console.log(`${args.deceasedName}: ${recorded}/${survivors.length} survivors remember.`);
+    return { recorded, survivors: survivors.length };
   },
 });

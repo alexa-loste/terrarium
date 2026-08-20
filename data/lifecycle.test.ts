@@ -14,6 +14,7 @@ import {
   deathNotice,
   diesOfAgeOn,
   drawLifespan,
+  griefBandFor,
   identityAtAge,
   identityStatesAge,
   othersSeeStage,
@@ -21,6 +22,8 @@ import {
   stageFor,
   stageNote,
   stagePromptLine,
+  witnessImportance,
+  witnessMemory,
 } from './lifecycle';
 
 // ── The drift guard ─────────────────────────────────────────────────────────────────────────────
@@ -400,5 +403,67 @@ describe('othersSeeStage', () => {
     expect(othersSeeStage('Russ', 'elder', 78)).toContain('Russ');
     expect(othersSeeStage('Russ', 'elder', 78)).toContain('78');
     expect(othersSeeStage('Ada', 'child', 9)).toContain('child');
+  });
+});
+
+// ── Being survived ──────────────────────────────────────────────────────────────────────────────
+
+describe('griefBandFor', () => {
+  test('never having met them is distant, not close', () => {
+    // A missing relationship row is the default state of two characters who have never spoken. If
+    // that read as anything but distant, every death would grieve the whole town equally.
+    expect(griefBandFor(null)).toBe('distant');
+  });
+
+  test('a barely-familiar acquaintance is distant however much they liked them', () => {
+    expect(griefBandFor({ familiarity: 10, affinity: 95 })).toBe('distant');
+  });
+
+  test('close needs BOTH familiarity and warmth', () => {
+    expect(griefBandFor({ familiarity: 80, affinity: 80 })).toBe('close');
+    expect(griefBandFor({ familiarity: 80, affinity: 20 })).toBe('known'); // knew them, disliked them
+    expect(griefBandFor({ familiarity: 30, affinity: 90 })).toBe('known');
+  });
+});
+
+describe('witnessMemory', () => {
+  const BANDS = ['close', 'known', 'distant'] as const;
+
+  test('every band names the person and their age', () => {
+    for (const band of BANDS) {
+      const m = witnessMemory('Desmond', 74, band);
+      expect([band, m.includes('Desmond'), m.includes('74')]).toEqual([band, true, true]);
+    }
+  });
+
+  test('each band reads differently', () => {
+    const texts = BANDS.map((b) => witnessMemory('Desmond', 74, b));
+    expect(new Set(texts).size).toBe(BANDS.length);
+  });
+
+  test('is written in the first person, as a memory rather than a log line', () => {
+    // It gets embedded and read back to the survivor as their own recollection. Third-person
+    // record-keeping prose would come back to them as something someone else wrote.
+    for (const band of BANDS) {
+      expect([band, /\bI\b/.test(witnessMemory('Desmond', 74, band))]).toEqual([band, true]);
+    }
+  });
+
+  test('does not guess the dead person\'s gender', () => {
+    // The bios never state pronouns, and a memory is permanent — a wrong guess would be too.
+    for (const band of BANDS) {
+      const m = witnessMemory('Desmond', 74, band);
+      expect([band, /\b(he|him|his|she|her|hers)\b/i.test(m)]).toEqual([band, false]);
+    }
+  });
+});
+
+describe('witnessImportance', () => {
+  test('grief is graded, and losing someone close outranks anything else remembered', () => {
+    // The scale already in use: a thought is 3, a journal reflection 5, something they made 7.
+    expect(witnessImportance('close')).toBeGreaterThan(7);
+    expect(witnessImportance('close')).toBeGreaterThan(witnessImportance('known'));
+    expect(witnessImportance('known')).toBeGreaterThan(witnessImportance('distant'));
+    expect(witnessImportance('distant')).toBeGreaterThan(3);
   });
 });
