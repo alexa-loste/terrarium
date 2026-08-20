@@ -4,6 +4,7 @@ import {
   WorldClock,
   WorldTime,
   worldTime,
+  worldMsAt,
   effectiveClock,
   reanchor,
   SPEED_OPTIONS,
@@ -176,6 +177,38 @@ export const currentTime = internalQuery({
     const clock = await readClock(ctx, args.worldId);
     const now = Date.now();
     return { ...worldTime(effective(clock), now), speed: clock.speed, frozen: clock.frozen };
+  },
+});
+
+// Read-only health check for the anchored clock, because this is a component that fails SILENTLY:
+// world-time is derived on read, so a wrong anchor looks exactly like a correct one until you
+// compare two readings hours apart. It reports the stored row, where the world actually stands,
+// and what each re-anchor WOULD do — running the deployed `reanchor`, not a copy of its arithmetic.
+//
+// `driftIfReanchored` is the number that matters. It must be 0 for every transition, always. A
+// non-zero value is the bug this was written for: negative = days about to be deleted (unfreezing a
+// clock that never froze), positive = days about to be invented (freezing an already-frozen one).
+export const clockHealth = query({
+  args: { worldId: v.id('worlds') },
+  handler: async (ctx, args) => {
+    const clock = await readClock(ctx, args.worldId);
+    const now = Date.now();
+    const cur: WorldClock = {
+      epochRealMs: clock.epochRealMs,
+      epochWorldMs: clock.epochWorldMs,
+      speed: clock.speed,
+    };
+    const position = worldMsAt(effective(clock), now);
+    const drift = (frozen: boolean) =>
+      worldMsAt(effectiveClock(reanchor(cur, frozen, now), frozen), now) - position;
+    return {
+      stored: { ...cur, frozen: clock.frozen },
+      day: worldTime(effective(clock), now).day,
+      anchorAgeMs: now - clock.epochRealMs,
+      // Both are computed against the row's ACTUAL frozen flag, so this is what would really happen.
+      driftIfReanchored: drift(clock.frozen),
+      driftIfTreatedAsRunning: drift(false),
+    };
   },
 });
 
