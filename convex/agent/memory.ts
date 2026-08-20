@@ -236,10 +236,52 @@ async function assessConversation(
       },
     ],
     temperature: 0,
-    max_tokens: 16,
+    // Was 16, which truncated every reply that wasn't bare digits — mid-word, mid-number. The
+    // prompt asks for three integers and the model frequently answers in prose anyway; cutting it
+    // off does not make it comply, it just destroys the answer.
+    max_tokens: 64,
   });
-  const nums = (content.match(/-?\d+/g) ?? []).map((n) => Math.max(-3, Math.min(3, parseInt(n, 10))));
-  return { warmth: nums[0] ?? 0, respect: nums[1] ?? 0, trust: nums[2] ?? 0 };
+  return parseAssessment(content);
+}
+
+// Turn whatever the model said into three numbers, and say whether it actually said anything.
+//
+// The old parser took the first three integers in document order. That is correct for the format
+// the prompt asks for and silently wrong for every format it doesn't, which turned out to be most
+// of them. Measured through the real code path on 2026-08-20, five fixtures:
+//
+//   "-3 0 0"                                         → fine, the asked-for shape
+//   "Respect: 3\nTrust: 2\nWarmth: -1"               → LABELLED AND REORDERED. Positionally this
+//                                                      reads warmth=3 when the model said -1. Not
+//                                                      a missing value — an inverted one.
+//   "…suggests an increase in warmth (3), respect ("  → prose, truncated mid-word by max_tokens
+//   "Based on the conversation … their relationship has" → prose, no digits at all → 0 0 0
+//
+// So: read LABELS first, in any order, wherever they appear. Fall back to positional only when the
+// model gave no labels at all. And report `parsed`, because "the model said nothing usable" and
+// "the model said this conversation changed nothing" are different facts that both used to arrive
+// here as three zeroes — which is why nobody could see this happening.
+const CLAMP3 = (n: number) => Math.max(-3, Math.min(3, n));
+
+export function parseAssessment(content: string): {
+  warmth: number;
+  respect: number;
+  trust: number;
+  parsed: boolean;
+} {
+  const labelled = (label: string): number | null => {
+    const m = content.match(new RegExp(`${label}\\s*[^-\\d]{0,12}?(-?\\d+)`, 'i'));
+    return m ? CLAMP3(parseInt(m[1], 10)) : null;
+  };
+  const w = labelled('warmth');
+  const r = labelled('respect');
+  const t = labelled('trust');
+  if (w !== null || r !== null || t !== null) {
+    return { warmth: w ?? 0, respect: r ?? 0, trust: t ?? 0, parsed: true };
+  }
+  const nums = (content.match(/-?\d+/g) ?? []).map((n) => CLAMP3(parseInt(n, 10)));
+  if (!nums.length) return { warmth: 0, respect: 0, trust: 0, parsed: false };
+  return { warmth: nums[0] ?? 0, respect: nums[1] ?? 0, trust: nums[2] ?? 0, parsed: true };
 }
 
 // Keep chronicle entries scannable even if the local model rambles past the asked length:

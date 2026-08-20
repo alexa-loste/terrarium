@@ -3,7 +3,7 @@ import { internalAction, internalMutation, internalQuery, query } from './_gener
 import { playerId } from './aiTown/ids';
 import { CHARGED_TOPICS, priorPole } from '../data/factions';
 import { getTraitsByPlayer } from './agentTraits';
-import { ASSESS_INSTRUCTIONS } from './agent/memory';
+import { ASSESS_INSTRUCTIONS, parseAssessment } from './agent/memory';
 import { chatCompletion } from './util/llm';
 
 // Terrarium v1.5 — the relationship graph + reputation. Directed edges (how `from` feels about
@@ -398,11 +398,11 @@ export const calibrateAssessment = internalAction({
         temperature: 0,
         max_tokens: 16,
       });
-      const nums = (content.match(/-?\d+/g) ?? []).map((n) =>
-        Math.max(-3, Math.min(3, parseInt(n, 10))),
-      );
-      const [warmth, respect, trust] = [nums[0] ?? 0, nums[1] ?? 0, nums[2] ?? 0];
-      const pass =
+      // The SAME parser the live path uses. Calibrating against a private copy would measure a
+      // parser nobody runs — and the first version of this file did exactly that, which is how it
+      // reported 5/5 while the real path was scrambling labelled replies.
+      const { warmth, respect, trust, parsed } = parseAssessment(content);
+      const signOk =
         f.expect === 'positive'
           ? warmth > 0
           : f.expect === 'negative'
@@ -412,12 +412,29 @@ export const calibrateAssessment = internalAction({
               : f.expect === 'nonNegative'
                 ? warmth >= 0
                 : respect > 0;
-      results.push({ name: f.name, expect: f.expect, warmth, respect, trust, raw: content.trim(), pass });
+      // An unparseable reply is a FAILURE, not a neutral result. Three zeroes from "the model said
+      // nothing usable" and three zeroes from "nothing changed" are different facts, and treating
+      // them alike is precisely what let a broken parser show up as a clean run.
+      const pass = parsed && signOk;
+      results.push({
+        name: f.name,
+        expect: f.expect,
+        warmth,
+        respect,
+        trust,
+        parsed,
+        raw: content.trim(),
+        pass,
+      });
     }
     const passed = results.filter((r) => r.pass).length;
     console.log(
       results
-        .map((r) => `${r.pass ? 'ok  ' : 'MISS'} ${r.name} (${r.expect}) w=${r.warmth} r=${r.respect} t=${r.trust}`)
+        .map(
+          (r) =>
+            `${r.pass ? 'ok  ' : 'MISS'} ${r.name} (${r.expect}) w=${r.warmth} r=${r.respect} ` +
+            `t=${r.trust}${r.parsed ? '' : '  [UNPARSEABLE]'}  ${JSON.stringify(r.raw)}`,
+        )
         .join('\n'),
     );
     return { passed, total: ASSESS_FIXTURES.length, results };
