@@ -212,8 +212,15 @@ export const ASSESS_INSTRUCTIONS =
   `The scale is symmetric and 0 is the honest answer for an exchange that changed nothing. ` +
   `Genuine warmth, appreciation, or a repaired rift SHOULD come out positive, just as friction ` +
   `should come out negative. ` +
-  `Reply with ONLY three integers separated by spaces — "-1 2 0" for a bruising but clarifying ` +
-  `argument, "2 1 1" for two people getting on well.`;
+  // Labelled lines, not bare integers. "Reply with ONLY three integers" does not work on this
+  // model: asked for digits it writes an essay, and the essay gets truncated by max_tokens into
+  // something with no answer in it at all. Asking for the shape it already reaches for on its own
+  // — it volunteered "Respect: 3 / Trust: 2 / Warmth: -1" unprompted — produces clean, complete,
+  // parseable output every time, in whatever order it likes, which the label parser handles.
+  `Answer with exactly these three lines and no other text:\n` +
+  `Warmth: <integer>\n` +
+  `Respect: <integer>\n` +
+  `Trust: <integer>`;
 
 // Rate how a finished conversation moved the two people's relationship: warmth (liking),
 // respect (esteem), trust — each a small integer -3..3. One cheap call, parsed leniently so a
@@ -236,10 +243,11 @@ async function assessConversation(
       },
     ],
     temperature: 0,
-    // Was 16, which truncated every reply that wasn't bare digits — mid-word, mid-number. The
-    // prompt asks for three integers and the model frequently answers in prose anyway; cutting it
-    // off does not make it comply, it just destroys the answer.
-    max_tokens: 64,
+    // Was 16, which truncated every reply that wasn't bare digits — mid-word, mid-number. Raising
+    // it alone did not help: at 64 the model still wrote prose and still hit the ceiling. What
+    // fixed it was asking for a format it will actually produce (see ASSESS_INSTRUCTIONS); 48 is
+    // comfortably more than the three short lines that now come back.
+    max_tokens: 48,
   });
   return parseAssessment(content);
 }
