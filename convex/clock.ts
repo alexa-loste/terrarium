@@ -1,6 +1,6 @@
 import { v } from 'convex/values';
 import { mutation, query, internalQuery } from './_generated/server';
-import { WorldClock, worldTime, SPEED_OPTIONS, WORLD_DAY_MS } from '../data/clock';
+import { WorldClock, WorldTime, worldTime, SPEED_OPTIONS, WORLD_DAY_MS } from '../data/clock';
 
 // Terrarium v1.3 — the anchored world clock (see data/clock.ts for the time math).
 //
@@ -128,6 +128,14 @@ export const getClock = query({
     return { ...clock, now, time: worldTime(effective(clock), now) };
   },
 });
+
+// The world time right now, for code running inside a query or mutation (which cannot runQuery the
+// internalQuery below). Same math, same frozen handling — one definition, so a caller can never
+// read a different clock than the agents do.
+export async function worldTimeNow(ctx: any, worldId: string): Promise<WorldTime> {
+  const clock = await readClock(ctx, worldId);
+  return worldTime(effective(clock), Date.now());
+}
 
 // Same data, callable from agent actions deciding where to go / what to say.
 export const currentTime = internalQuery({

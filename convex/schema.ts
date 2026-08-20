@@ -259,13 +259,27 @@ export default defineSchema({
     playerId,
     playerName: v.string(),
     status: v.union(v.literal('alive'), v.literal('dead')),
-    bornDay: v.number(), // world-day index; the original cast is born on day 0
+    // World-day index. NEGATIVE for the founding cast, who are already the ages their bios claim
+    // when the world starts — one world-day is one year of a life (see data/lifecycle.ts for why
+    // the identity prose forced that), so Mara at 31 is born 31 days before the seed runs. Age is
+    // derived from this and never accumulated, so a missed pass costs nothing.
+    bornDay: v.number(),
     // Per-agent, drawn with variance around the configured mean so a cohort seeded together does
-    // not die together. Death is a rising hazard near this, not a hard cutoff on it.
+    // not die together. Death is a rising hazard near this, not a hard cutoff on it — which means
+    // most characters die a few years short of it. It is the frailty anchor, not a promise.
     lifespanDays: v.number(),
     // Childhood: before this world-day the character exists, moves and is visible, but holds no
     // conversations. Cheap on the inference budget and true to life.
     maturesDay: v.number(),
+    // Derived from (age, lifespanDays) every world-day and stored only so a CHANGE is detectable.
+    // Optional because rows written before aging existed have neither.
+    stage: v.optional(v.union(v.literal('child'), v.literal('adult'), v.literal('elder'))),
+    lastAgedDay: v.optional(v.number()),
+    // Set by the world-wide daily pass when this character crosses into a new stage, and cleared by
+    // that character's own night tick after they journal it. A take-and-clear handoff rather than a
+    // flag, because the pass runs once for everyone (from whichever agent reaches the new day
+    // first) while the journal entry has to be written in each character's own voice, later.
+    pendingStageNote: v.optional(v.string()),
     diedDay: v.optional(v.number()),
     cause: v.optional(v.string()), // 'age' for now; 'starvation' once the economy pass lands
     // Lineage. Absent for the founding cast, who have no parents.

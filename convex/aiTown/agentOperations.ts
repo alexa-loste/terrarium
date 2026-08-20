@@ -583,6 +583,32 @@ async function tickVitals(
           worldId: args.worldId,
           currentDay: time.day,
         });
+        // v3.0 — AGING. One world-day is one year of a life (data/lifecycle.ts explains why the
+        // identity prose forced that unit). World-wide + idempotent, exactly like the inner-life
+        // pass above: whichever agent reaches the new day first advances EVERYONE's stage, so a
+        // character who bedded down rough, or slept through their own tick, still ages.
+        //
+        // The transition is collected separately and per-character, because the pass runs once for
+        // the whole town while the journal entry has to be in this character's own voice. Nobody
+        // dies here — mortality is not wired yet.
+        await ctx.runMutation(internal.lifecycle.ageWorld, {
+          worldId: args.worldId,
+          day: time.day,
+        });
+        const crossedInto = await ctx.runMutation(internal.lifecycle.takeStageNote, {
+          worldId: args.worldId,
+          playerId: args.player.id,
+        });
+        if (crossedInto) {
+          await writeJournalEntry(
+            ctx,
+            args.worldId,
+            args.agent.id,
+            args.player.id,
+            'event',
+            crossedInto,
+          );
+        }
         // Reckon the day's work obligation: falling short bites (money + standing) and they
         // stew on it in their journal (v1.9).
         if (character) {
