@@ -11,6 +11,7 @@ import {
 import { playerId } from './aiTown/ids';
 import { kickEngine, startEngine, stopEngine } from './aiTown/main';
 import { engineInsertInput } from './engine/abstractGame';
+import { freezeClock, unfreezeClock } from './clock';
 
 export const defaultWorldStatus = query({
   handler: async (ctx) => {
@@ -51,6 +52,8 @@ export const heartbeatWorld = mutation({
     if (worldStatus.status === 'inactive') {
       console.log(`Restarting inactive world ${worldStatus._id}...`);
       await ctx.db.patch(worldStatus._id, { status: 'running' });
+      // Resume world-time from exactly where it stopped. See stopInactiveWorlds for why it froze.
+      await unfreezeClock(ctx, worldStatus.worldId);
       await startEngine(ctx, worldStatus.worldId);
     }
   },
@@ -66,6 +69,21 @@ export const stopInactiveWorlds = internalMutation({
       }
       console.log(`Stopping inactive world ${worldStatus._id}`);
       await ctx.db.patch(worldStatus._id, { status: 'inactive' });
+      // Stop the CLOCK too, not just the engine.
+      //
+      // This was asymmetric and the asymmetry was silent: testing:stop froze the clock, and this
+      // path — the one that actually fires, after every two minutes of nobody watching — did not.
+      // World-time is derived on read from wall time, so an idle world kept advancing its calendar
+      // while no agent ticked. Days went by with nothing in them.
+      //
+      // Found through mortality, because the daily lifecycle pass rolls for death on the CURRENT
+      // day only: a day nobody ticked is a day nobody could die, and those rolls are gone for
+      // good. Characters were outliving their own lifespans in proportion to how long the page had
+      // been closed — 12 unrolled days in one evening on the live world. It is not only aging:
+      // work quotas, plans and goals all key on `time.day` and were skipping the same days.
+      //
+      // A world that nobody is running should not get older.
+      await freezeClock(ctx, worldStatus.worldId);
       await stopEngine(ctx, worldStatus.worldId);
     }
   },
