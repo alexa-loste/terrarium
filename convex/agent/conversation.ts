@@ -12,7 +12,7 @@ import * as memory from './memory';
 import { api, internal } from '../_generated/api';
 import * as embeddingsCache from './embeddingsCache';
 import { GameId, conversationId, playerId } from '../aiTown/ids';
-import { NUM_MEMORIES_TO_SEARCH } from '../constants';
+import { MAX_PROMPT_MESSAGES, NUM_MEMORIES_TO_SEARCH } from '../constants';
 import { nearestPlace } from '../../data/places';
 import { timeOfDayPrompt, WorldTime } from '../../data/clock';
 import { planWhenLabel } from '../../data/plans';
@@ -517,7 +517,12 @@ async function previousMessages(
   conversationId: GameId<'conversations'>,
 ) {
   const llmMessages: LLMMessage[] = [];
-  const prevMessages = await ctx.runQuery(api.messages.listMessages, { worldId, conversationId });
+  const all = await ctx.runQuery(api.messages.listMessages, { worldId, conversationId });
+  // Only the tail. `listMessages` collects the WHOLE conversation and stays uncapped on purpose —
+  // the UI shows the full transcript — but feeding all of it back into every prompt is a runaway:
+  // each message makes the next generation slower, and past ACTION_TIMEOUT the engine gives up on
+  // the operation while the model is still writing. See MAX_PROMPT_MESSAGES for the incident.
+  const prevMessages = all.slice(-MAX_PROMPT_MESSAGES);
   for (const message of prevMessages) {
     const author = message.author === player.id ? player : otherPlayer;
     const recipient = message.author === player.id ? otherPlayer : player;

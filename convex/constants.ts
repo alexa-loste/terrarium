@@ -47,6 +47,37 @@ export const MAX_CONVERSATION_DURATION = 10 * 60_000; // more time locally
 // Leave a conversation if it has more than 8 messages;
 export const MAX_CONVERSATION_MESSAGES = 8;
 
+// How many of a conversation's messages are replayed into an LLM prompt. Comfortably above
+// MAX_CONVERSATION_MESSAGES, so it never bites a healthy conversation — it exists only to bound
+// the pathological one.
+//
+// THE INCIDENT (2026-08-20, Mara and Theo). A conversation reached 124 messages against a cap of
+// 8, every one of them a goodbye, and ran for two hours. The transcript was replayed into each
+// prompt uncapped, so every farewell made the next generation slower, until generation crossed
+// ACTION_TIMEOUT (120s). From there the loop could not break:
+//
+//   1. Past the message cap, both agents take the `leave` branch on every tick.
+//   2. The leave message now takes >120s to generate, so the engine times the operation out and
+//      clears `inProgressOperation` — about ten seconds before the model actually finishes.
+//   3. The completion lands anyway. `agentSendMessage` writes the message row unconditionally, and
+//      only then does `agentFinishSendingMessage` notice the operationId is stale and return early
+//      — so `conversation.leave()` never runs and `numMessages` never increments.
+//   4. Net effect per cycle: one more message in the transcript, no state change, and a slower
+//      next generation. It is self-reinforcing.
+//
+// The signature was the cadence — exactly one message per agent per ACTION_TIMEOUT, to the second.
+// Leaving was gated behind an LLM call with unbounded latency, so a slow model did not degrade the
+// conversation, it made the conversation IMMORTAL. This cap stops the runaway; the hard stop below
+// makes sure ending a conversation never depends on a model replying at all.
+export const MAX_PROMPT_MESSAGES = 20;
+
+// A conversation this far past MAX_CONVERSATION_DURATION is ended by the engine outright, with no
+// parting line. Deliberately generous: it should only ever catch a conversation whose polite exit
+// is not happening. Duration-based rather than message-based on purpose — in the incident above
+// `numMessages` was frozen at 9 while the real transcript ran to 124, so any check reading it
+// would have been just as stuck as the thing it was meant to catch.
+export const CONVERSATION_HARD_STOP = 3 * MAX_CONVERSATION_DURATION;
+
 // Wait for 1s after sending an input to the engine. We can remove this
 // once we can await on an input being processed.
 export const INPUT_DELAY = 1000;

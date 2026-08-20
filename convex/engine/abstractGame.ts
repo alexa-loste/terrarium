@@ -142,7 +142,27 @@ export async function engineInsertInput(
     .withIndex('byInputNumber', (q) => q.eq('engineId', engineId))
     .order('desc')
     .first();
-  const number = prevInput ? prevInput.number + 1 : 0;
+  // The input number must be derived from the ENGINE's watermark as well as from the surviving
+  // rows, never from the rows alone.
+  //
+  // THE INCIDENT (2026-08-20). `inputs` is vacuumed daily (convex/crons.ts) and the world had been
+  // idle for weeks, so every row aged out and the table emptied. This function then handed the next
+  // input number 0 — while `engine.processedInputNumber` still stood at 34208 from before the
+  // sweep. `loadInputs` only returns inputs numbered ABOVE that watermark, so from that moment the
+  // engine could not see a single input it received, and never would: numbering climbs by one per
+  // input and the watermark was 34208 ahead.
+  //
+  // The town did not look broken, which is the worst part of it. Ticks kept running, the model kept
+  // answering, messages kept appearing (agentSendMessage writes the row directly rather than
+  // through an input). What silently stopped was every state TRANSITION: no agent operation could
+  // ever complete, so all seven agents timed out in lockstep every ACTION_TIMEOUT and retried
+  // forever, and one conversation reached 124 messages against a cap of 8 because the `leave` input
+  // was never applied.
+  //
+  // This is a key outliving the data it indexes. The row-derived sequence was only ever correct
+  // because nothing deleted rows — and a cron that deletes them was already in the repo.
+  const engine = await ctx.db.get(engineId);
+  const number = Math.max(prevInput?.number ?? -1, engine?.processedInputNumber ?? -1) + 1;
   const inputId = await ctx.db.insert('inputs', {
     engineId,
     number,

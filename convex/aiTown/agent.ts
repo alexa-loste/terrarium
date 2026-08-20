@@ -10,6 +10,7 @@ import {
   CONVERSATION_DISTANCE,
   INVITE_ACCEPT_PROBABILITY,
   INVITE_TIMEOUT,
+  CONVERSATION_HARD_STOP,
   MAX_CONVERSATION_DURATION,
   MAX_CONVERSATION_MESSAGES,
   MESSAGE_COOLDOWN,
@@ -204,6 +205,27 @@ export class Agent {
             // Wait on the other player to say something up to the awkward deadline.
             return;
           }
+        }
+        // A conversation grossly past its limit is ended outright, with no parting line.
+        //
+        // Everything below this point makes leaving CONDITIONAL ON AN LLM CALL SUCCEEDING: the
+        // agent starts a `leave` operation, and the conversation only actually ends when that
+        // completion comes back and its input is applied. That is a housekeeping state transition
+        // gated behind an unreliable operation with unbounded latency, and when the model got slow
+        // enough to blow ACTION_TIMEOUT the two of them were stuck saying goodbye for two hours
+        // (124 messages; see MAX_PROMPT_MESSAGES for the full mechanism). The engine must be able
+        // to end a conversation on its own.
+        //
+        // Uses `started`, which is written once and never touched again — unlike `numMessages`,
+        // which in that incident was frozen at 9 while the transcript ran to 124. A backstop that
+        // reads state the failure itself corrupts is no backstop at all.
+        if (started + CONVERSATION_HARD_STOP < now) {
+          console.warn(
+            `Force-stopping conversation ${conversation.id} between ${player.id} and ` +
+              `${otherPlayer.id}: ${Math.round((now - started) / 1000)}s old, no goodbye landed.`,
+          );
+          conversation.stop(game, now);
+          return;
         }
         // See if the conversation has been going on too long and decide to leave.
         const tooLongDeadline = started + MAX_CONVERSATION_DURATION;

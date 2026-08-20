@@ -18,6 +18,60 @@ import { startConversationMessage } from './agent/conversation';
 import { GameId } from './aiTown/ids';
 import { ensureClockRow, freezeClock, unfreezeClock } from './clock';
 
+// Repair an engine whose input numbering restarted below its own watermark.
+//
+// The failure this undoes: `inputs` is vacuumed daily, and when the table emptied,
+// `engineInsertInput` restarted numbering at 0 while `engine.processedInputNumber` kept its old,
+// far-higher value. `loadInputs` only returns inputs numbered above the watermark, so the engine
+// stopped seeing every input it received — silently, while continuing to tick. See the long note
+// in engine/abstractGame.ts. That numbering bug is fixed at the source; this exists for a
+// deployment already wedged by it.
+//
+// It lowers the watermark to the highest input actually present, which DISCARDS the queued
+// backlog. That is deliberate: those inputs are destinations and activities decided against a
+// world state that is now hours stale, and replaying them would be worse than dropping them. The
+// agents re-decide within one ACTION_TIMEOUT.
+//
+// Stop the world first, or a step in flight can write the old watermark back:
+//   npx convex run testing:stop
+//   npx convex run testing:resyncInputNumbering
+//   npx convex run testing:resume
+//
+// A no-op on a healthy engine, so it is safe to run when unsure.
+export const resyncInputNumbering = internalMutation({
+  handler: async (ctx) => {
+    const engines = await ctx.db.query('engines').collect();
+    const report = [];
+    for (const engine of engines) {
+      const highest = await ctx.db
+        .query('inputs')
+        .withIndex('byInputNumber', (q) => q.eq('engineId', engine._id))
+        .order('desc')
+        .first();
+      const highestNumber = highest?.number ?? -1;
+      const watermark = engine.processedInputNumber ?? -1;
+      if (watermark <= highestNumber) {
+        report.push({ engineId: engine._id, watermark, highestNumber, action: 'healthy' });
+        continue;
+      }
+      // Count what we're dropping so the repair is honest about it rather than silent.
+      const orphaned = await ctx.db
+        .query('inputs')
+        .withIndex('byInputNumber', (q) => q.eq('engineId', engine._id))
+        .collect();
+      await ctx.db.patch(engine._id, { processedInputNumber: highestNumber });
+      report.push({
+        engineId: engine._id,
+        watermark,
+        highestNumber,
+        action: 'resynced',
+        inputsDiscarded: orphaned.length,
+      });
+    }
+    return report;
+  },
+});
+
 // Clear all of the tables except for the embeddings cache.
 const excludedTables: Array<TableNames> = ['embeddingsCache'];
 
